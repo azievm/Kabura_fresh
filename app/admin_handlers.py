@@ -636,10 +636,14 @@ async def complete_order(callback: CallbackQuery, session: AsyncSession, bot: Bo
                 await callback.answer("ℹ️ Заказ уже завершен", show_alert=True)
                 return
             
-            # Удаляем связанные элементы корзины
+            # Удаляем связанные элементы корзины и состав заказа
             await session.execute(
                 delete(CartItem)
                 .where(CartItem.order_id == order_id)
+            )
+            await session.execute(
+                delete(OrderItem)
+                .where(OrderItem.order_id == order_id)
             )
             await session.delete(order)
         

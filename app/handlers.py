@@ -235,9 +235,42 @@ async def process_about(callback: CallbackQuery):
             "ℹ️ О нашем сервисе:\n\n"
             "Мы предлагаем свежие продукты с доставкой.\n"
             "Работаем ежедневно с 8:00 до 20:00.\n"
-            "Минимальный заказ: 1 кг.\n"
-            "Доставка: бесплатно от 3000₽.",
+            "Минимальный заказ: 1 кг.\n",
             reply_markup=get_about_keyboard()
+        )
+    finally:
+        await callback.answer()
+
+@router.callback_query(F.data == "delivery_info")
+async def process_delivery_info(callback: CallbackQuery):
+    """Обработчик кнопки условий доставки"""
+    delivery_text = (
+        "🚚 Условия доставки:\n\n"
+        "📍 <b>Зона доставки:</b> Москва (ТиНАО, ЮЗАО, ЗАО)\n\n"
+        "⏰ <b>Время доставки:</b>\n"
+        "  • Пн-Пт: 7:00-18:00\n"
+        "  • Сб-Вс: 8:00-17:00\n\n"
+        "💰 <b>Стоимость доставки:</b>\n"
+        "  • Бесплатно от 3000₽\n"
+        "  • Доставка: 320₽ (при сумме менее 3000₽)\n\n"
+        "✅ <b>Минимальный заказ:</b> 1 кг"
+    )
+    try:
+        await callback.message.edit_text(
+            delivery_text,
+            reply_markup=get_about_keyboard(),
+            parse_mode=ParseMode.HTML
+        )
+    except TelegramBadRequest:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        
+        await callback.message.answer(
+            delivery_text,
+            reply_markup=get_about_keyboard(),
+            parse_mode=ParseMode.HTML
         )
     finally:
         await callback.answer()
@@ -613,13 +646,9 @@ async def show_cart_page(message: Message, session: AsyncSession, user_id: int, 
         builder = InlineKeyboardBuilder()
 
         for item, product in cart_items:
-            try:
+            unit = ''.join([c for c in str(getattr(product, 'amount', '')) if c.isalpha()]).strip()
+            btn_text = f"✏️ {product.name[:15]} ({item.quantity} {unit})"
 
-                unit = ''.join([c for c in str(getattr(product, 'amount', '')) if c.isalpha()]).strip()
-                btn_text = f"✏️ {product.name[:15]} ({item.quantity} {unit})"
-            except:
-                btn_text = f"✏️ {product.name[:15]} ({item.quantity}) {unit}"
-            
             builder.row(
                 InlineKeyboardButton(
                     text=btn_text,
@@ -1030,9 +1059,18 @@ async def check_payment_handler(
         is_paid = await payment_system.verify_payment_success(payment_id)
         
         if is_paid:
+            # Защита от повторного нажатия: заказ по этому платежу уже мог быть создан
+            existing_order = await session.scalar(
+                select(Order).where(Order.payment_id == payment_id)
+            )
+            if existing_order:
+                await callback.answer(f"✅ Заказ #{existing_order.id} уже оформлен!", show_alert=True)
+                await state.clear()
+                return
+
             # Получаем все данные из состояния
             state_data = await state.get_data()
-            
+
             # Получаем товары из корзины
             cart_items = await session.execute(
                 select(CartItem)
