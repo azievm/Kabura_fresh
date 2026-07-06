@@ -45,3 +45,7 @@ NOTIFICATION_CHAT_ID = int(os.getenv('NOTIFICATION_CHAT_ID', '-1002579340956'))
 # Настройки HTTP API (Mini App)
 API_HOST = os.getenv('API_HOST', '0.0.0.0')
 API_PORT = int(os.getenv('API_PORT', '8080'))
+
+# Публичный HTTPS-адрес Mini App (туннель на этапе разработки, домен на проде).
+# Если не задан — кнопка "Открыть магазин" в боте не показывается.
+MINI_APP_URL = os.getenv('MINI_APP_URL', '')

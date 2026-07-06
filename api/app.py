@@ -4,10 +4,12 @@
 Пока содержит только каркас и эндпоинт /api/me для проверки авторизации.
 """
 import logging
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +18,8 @@ from app.database import Database, User
 from .deps import get_session, get_telegram_user
 
 logger = logging.getLogger(__name__)
+
+WEBAPP_DIR = Path(__file__).parent / "webapp"
 
 
 class MeResponse(BaseModel):
@@ -40,6 +44,11 @@ def create_api(db: Database) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.get("/")
+    async def index() -> FileResponse:
+        """Страница Mini App (пока диагностическая; реальный UI — на этапе фронтенда)."""
+        return FileResponse(WEBAPP_DIR / "index.html")
 
     @app.get("/api/health")
     async def health() -> Dict[str, str]:

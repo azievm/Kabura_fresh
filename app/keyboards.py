@@ -3,7 +3,8 @@ from aiogram.types import (
     InlineKeyboardButton,
     ReplyKeyboardMarkup,
     KeyboardButton,
-    ReplyKeyboardRemove
+    ReplyKeyboardRemove,
+    WebAppInfo
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -12,7 +13,7 @@ from typing import List
 from sqlalchemy import func, select
 
 from app.database import CartItem, Product
-from .config import DELIVERY_INTERVALS
+from .config import DELIVERY_INTERVALS, MINI_APP_URL
 import time
 
 
@@ -21,14 +22,18 @@ PRODUCTS_PER_PAGE = 10
 
 def get_main_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.add(
-        InlineKeyboardButton(text="📋 Каталог", callback_data="catalog"),
-        InlineKeyboardButton(text='🛒 Корзина', callback_data='view_cart'),
-        InlineKeyboardButton(text='👤 Мой профиль', callback_data='profile'),
+    # Кнопка открытия Mini App — только если задан публичный HTTPS-адрес
+    if MINI_APP_URL:
+        builder.row(
+            InlineKeyboardButton(text="🛍 Открыть магазин", web_app=WebAppInfo(url=MINI_APP_URL))
+        )
+    builder.row(InlineKeyboardButton(text="📋 Каталог", callback_data="catalog"))
+    builder.row(InlineKeyboardButton(text='🛒 Корзина', callback_data='view_cart'))
+    builder.row(InlineKeyboardButton(text='👤 Мой профиль', callback_data='profile'))
+    builder.row(
         InlineKeyboardButton(text="📞 Контакты", callback_data="contacts"),
         InlineKeyboardButton(text="ℹ️ О сервисе", callback_data="about")
     )
-    builder.adjust(1,1,1,2)
     return builder.as_markup()
 
 
