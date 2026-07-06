@@ -72,46 +72,42 @@ PRODUCTS_PER_PAGE = 10
 @router.message(Command("start"))
 async def cmd_start(message: Message, db: Database):
     """Обработчик команды /start с отправкой фото"""
+    user_id = message.from_user.id
+    username = message.from_user.username or ""
+    first_name = message.from_user.first_name or "Пользователь"
+    last_name = message.from_user.last_name or ""
+
+    # Сохраняем пользователя. Ошибка БД не должна мешать показать меню.
     try:
-        user_id = message.from_user.id
-        username = message.from_user.username or ""
-        first_name = message.from_user.first_name or "Пользователь"
-        last_name = message.from_user.last_name or ""
-        
         user = await db.get_user(user_id)
         if not user:
-            user = await db.create_user(user_id, username, first_name, last_name)
+            await db.create_user(user_id, username, first_name, last_name)
+    except Exception:
+        logger.exception("Ошибка при сохранении пользователя в /start (user_id=%s)", user_id)
 
-        welcome_text = (
-            f"👋 Привет, {first_name}!\n\n"
-            "Добро пожаловать в наш магазин свежих продуктов.\n"
-            "У нас всегда самые свежие фрукты и овощи!\n"
-            "Выберите действие в меню ниже:"
-        )
+    welcome_text = (
+        f"👋 Привет, {first_name}!\n\n"
+        "Добро пожаловать в наш магазин свежих продуктов.\n"
+        "У нас всегда самые свежие фрукты и овощи!\n"
+        "Выберите действие в меню ниже:"
+    )
 
-        try:
-
-            photo = FSInputFile("app/img/fresh.jpg")  
-            await message.answer_photo(
-                photo=photo,
-                caption=welcome_text,
-                reply_markup=get_main_keyboard(),
-                parse_mode=ParseMode.HTML
-            )
-        except FileNotFoundError:
-            raise FileNotFoundError
-            
-    except FileNotFoundError:
-        await message.answer(
-            "👋 Добро пожаловать в наш магазин свежих продуктов!\n"
-            "Выберите действие в меню ниже:",
+    # Пытаемся показать приветствие с фото; при любой проблеме (нет файла,
+    # сбой сети) — отправляем то же приветствие текстом, а не ошибку.
+    try:
+        photo = FSInputFile("app/img/fresh.jpg")
+        await message.answer_photo(
+            photo=photo,
+            caption=welcome_text,
             reply_markup=get_main_keyboard(),
             parse_mode=ParseMode.HTML
         )
-        
-    except Exception as e:
+    except Exception:
+        logger.warning("Не удалось отправить фото в /start, отправляю текст", exc_info=True)
         await message.answer(
-            "Произошла ошибка при запуске бота. Пожалуйста, попробуйте позже."
+            welcome_text,
+            reply_markup=get_main_keyboard(),
+            parse_mode=ParseMode.HTML
         )
 
 
