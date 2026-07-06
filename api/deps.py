@@ -41,3 +41,8 @@ async def get_telegram_user(
         return parse_user(fields)
     except InitDataError as e:
         raise HTTPException(status_code=401, detail=f"invalid initData: {e}")
+
+
+async def get_user_id(tg_user: Dict[str, Any] = Depends(get_telegram_user)) -> int:
+    """telegram_id текущего пользователя (проверенный)."""
+    return int(tg_user["id"])
