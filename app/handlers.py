@@ -25,7 +25,7 @@ from aiogram.types import (
     KeyboardButton,
     )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from app.database import CartItem, Database, Order, OrderItem, Product
+from app.database import CartItem, Database, Order, OrderItem, Product, User
 from app.keyboards import (
     get_about_keyboard,
     get_contact_keyboard,
@@ -38,15 +38,20 @@ from app.keyboards import (
     get_location_keyboard
 )
 from app.payment import PaymentSystem
-from .config import ADMIN_IDS, PAYMENT_TOKEN, ITEMS_PER_PAGE
+from .config import ADMIN_IDS, PAYMENT_SHOP_ID, PAYMENT_SECRET_KEY, ITEMS_PER_PAGE
 
 # Создаем роутер
 router = Router()
 
-payment_system = PaymentSystem(
-    shop_id="0493094320",
-        secret_key="489342034920492343"
-)
+payment_system = None
+if PAYMENT_SHOP_ID and PAYMENT_SECRET_KEY:
+    payment_system = PaymentSystem(
+        shop_id=PAYMENT_SHOP_ID,
+        secret_key=PAYMENT_SECRET_KEY
+    )
+else:
+    # Если ключи не настроены, при оформлении заказа появится понятное сообщение.
+    print("PAYMENT_SHOP_ID или PAYMENT_SECRET_KEY не настроены. Платежная система отключена.")
 
 
 # Состояния FSM для оформления заказа
@@ -230,9 +235,42 @@ async def process_about(callback: CallbackQuery):
             "ℹ️ О нашем сервисе:\n\n"
             "Мы предлагаем свежие продукты с доставкой.\n"
             "Работаем ежедневно с 8:00 до 20:00.\n"
-            "Минимальный заказ: 1 кг.\n"
-            "Доставка: бесплатно от 3000₽.",
+            "Минимальный заказ: 1 кг.\n",
             reply_markup=get_about_keyboard()
+        )
+    finally:
+        await callback.answer()
+
+@router.callback_query(F.data == "delivery_info")
+async def process_delivery_info(callback: CallbackQuery):
+    """Обработчик кнопки условий доставки"""
+    delivery_text = (
+        "🚚 Условия доставки:\n\n"
+        "📍 <b>Зона доставки:</b> Москва (ТиНАО, ЮЗАО, ЗАО)\n\n"
+        "⏰ <b>Время доставки:</b>\n"
+        "  • Пн-Пт: 7:00-18:00\n"
+        "  • Сб-Вс: 8:00-17:00\n\n"
+        "💰 <b>Стоимость доставки:</b>\n"
+        "  • Бесплатно от 3000₽\n"
+        "  • Доставка: 320₽ (при сумме менее 3000₽)\n\n"
+        "✅ <b>Минимальный заказ:</b> 1 кг"
+    )
+    try:
+        await callback.message.edit_text(
+            delivery_text,
+            reply_markup=get_about_keyboard(),
+            parse_mode=ParseMode.HTML
+        )
+    except TelegramBadRequest:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        
+        await callback.message.answer(
+            delivery_text,
+            reply_markup=get_about_keyboard(),
+            parse_mode=ParseMode.HTML
         )
     finally:
         await callback.answer()
@@ -608,13 +646,9 @@ async def show_cart_page(message: Message, session: AsyncSession, user_id: int, 
         builder = InlineKeyboardBuilder()
 
         for item, product in cart_items:
-            try:
+            unit = ''.join([c for c in str(getattr(product, 'amount', '')) if c.isalpha()]).strip()
+            btn_text = f"✏️ {product.name[:15]} ({item.quantity} {unit})"
 
-                unit = ''.join([c for c in str(getattr(product, 'amount', '')) if c.isalpha()]).strip()
-                btn_text = f"✏️ {product.name[:15]} ({item.quantity} {unit})"
-            except:
-                btn_text = f"✏️ {product.name[:15]} ({item.quantity}) {unit}"
-            
             builder.row(
                 InlineKeyboardButton(
                     text=btn_text,
@@ -810,21 +844,64 @@ async def start_checkout(callback: CallbackQuery, state: FSMContext, session: As
         if not total:
             await callback.answer("Ваша корзина пуста", show_alert=True)
             return
-            
+
         await state.update_data(total=total)
-        
+
+        # Если у пользователя уже есть сохранённые данные с прошлого заказа - предлагаем их использовать
+        db_user = await session.scalar(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        if db_user and db_user.customer_name and db_user.phone and db_user.delivery_address:
+            await state.update_data(
+                name=db_user.customer_name,
+                phone=db_user.phone,
+                address=db_user.delivery_address
+            )
+            builder = InlineKeyboardBuilder()
+            builder.row(InlineKeyboardButton(text="✅ Всё верно, продолжить", callback_data="checkout_use_saved"))
+            builder.row(InlineKeyboardButton(text="✏️ Изменить данные", callback_data="checkout_edit_data"))
+            builder.row(InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_order"))
+            await callback.message.answer(
+                "Оформить заказ на сохранённые данные?\n\n"
+                f"👤 Имя: {db_user.customer_name}\n"
+                f"📞 Телефон: {db_user.phone}\n"
+                f"📍 Адрес: {db_user.delivery_address}",
+                reply_markup=builder.as_markup()
+            )
+            await callback.answer()
+            return
+
         builder = InlineKeyboardBuilder()
         builder.add(InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_order"))
-        
+
         await callback.message.answer(
             "Введите ваше имя:",
             reply_markup=builder.as_markup()
         )
         await state.set_state(OrderStates.WAITING_NAME)
         await callback.answer()
-        
+
     except Exception as e:
         await callback.answer("⚠️ Ошибка при оформлении заказа", show_alert=True)
+
+@router.callback_query(F.data == "checkout_use_saved")
+async def checkout_use_saved(callback: CallbackQuery, state: FSMContext):
+    """Пользователь подтвердил использование сохранённых данных - сразу переходим к выбору времени доставки"""
+    await callback.answer()
+    await ask_delivery_time(callback.message, state)
+
+@router.callback_query(F.data == "checkout_edit_data")
+async def checkout_edit_data(callback: CallbackQuery, state: FSMContext):
+    """Пользователь хочет ввести данные заново"""
+    builder = InlineKeyboardBuilder()
+    builder.add(InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_order"))
+
+    await callback.message.answer(
+        "Введите ваше имя:",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(OrderStates.WAITING_NAME)
+    await callback.answer()
 
 @router.message(OrderStates.WAITING_NAME)
 async def process_name(message: Message, state: FSMContext):
@@ -904,15 +981,8 @@ async def safe_answer_callback(callback: CallbackQuery, text: str = None, show_a
             return False
         raise
 
-@router.message(OrderStates.WAITING_ADDRESS, F.text)
-async def process_address(message: Message, state: FSMContext):
-    address = message.text.strip()
-    if not address:
-        await message.answer("Пожалуйста, введите адрес текстом")
-        return
-        
-    await state.update_data(address=address)
-    
+async def ask_delivery_time(message: Message, state: FSMContext):
+    """Показывает выбор интервала доставки (общий шаг для ручного ввода и сохранённых данных)"""
     builder = InlineKeyboardBuilder()
     time_slots = [
         ("Утро (9-12)", "delivery_morning"),
@@ -921,14 +991,24 @@ async def process_address(message: Message, state: FSMContext):
     ]
     for text, callback_data in time_slots:
         builder.row(InlineKeyboardButton(text=text, callback_data=callback_data))
-    
+
     builder.row(InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_order"))
-    
+
     await message.answer(
         "Выберите удобный интервал доставки:",
         reply_markup=builder.as_markup()
     )
     await state.set_state(OrderStates.WAITING_DELIVERY_TIME)
+
+@router.message(OrderStates.WAITING_ADDRESS, F.text)
+async def process_address(message: Message, state: FSMContext):
+    address = message.text.strip()
+    if not address:
+        await message.answer("Пожалуйста, введите адрес текстом")
+        return
+
+    await state.update_data(address=address)
+    await ask_delivery_time(message, state)
 
 # Добавляем функцию для преобразования callback_data в читаемый текст
 def get_delivery_time_text(callback_data: str) -> str:
@@ -958,6 +1038,12 @@ async def process_delivery_time(
         await state.update_data(delivery_time=delivery_time)
         
         # Создаем платеж
+        if payment_system is None:
+            await callback.message.answer(
+                "⚠️ Платежная система не настроена. Обратитесь к администратору."
+            )
+            return
+
         payment = await payment_system.create_payment(
             amount=float(data['total']),
             user_id=user_id,
@@ -965,7 +1051,9 @@ async def process_delivery_time(
         )
         
         if not payment:
-            await callback.message.answer("⚠️ Ошибка платежной системы. Пожалуйста, попробуйте позже.")
+            await callback.message.answer(
+                "⚠️ Ошибка платежной системы. Проверьте настройки платежей или повторите позже."
+            )
             return
             
         # Сохраняем данные платежа
@@ -1017,9 +1105,18 @@ async def check_payment_handler(
         is_paid = await payment_system.verify_payment_success(payment_id)
         
         if is_paid:
+            # Защита от повторного нажатия: заказ по этому платежу уже мог быть создан
+            existing_order = await session.scalar(
+                select(Order).where(Order.payment_id == payment_id)
+            )
+            if existing_order:
+                await callback.answer(f"✅ Заказ #{existing_order.id} уже оформлен!", show_alert=True)
+                await state.clear()
+                return
+
             # Получаем все данные из состояния
             state_data = await state.get_data()
-            
+
             # Получаем товары из корзины
             cart_items = await session.execute(
                 select(CartItem)
@@ -1057,6 +1154,30 @@ async def check_payment_handler(
                     price=item.price
                 )
                 session.add(order_item)
+            
+            # Обновляем информацию о пользователе (сохраняем имя, телефон и адрес для будущих заказов)
+            try:
+                db_user = await session.scalar(select(User).where(User.telegram_id == user_id))
+                if db_user:
+                    if state_data.get('name'):
+                        db_user.customer_name = state_data.get('name')
+                    if state_data.get('phone'):
+                        db_user.phone = state_data.get('phone')
+                    if state_data.get('address'):
+                        db_user.delivery_address = state_data.get('address')
+                else:
+                    # Если пользователя нет в таблице (маловероятно), создаём запись
+                    new_user = User(
+                        telegram_id=user_id,
+                        first_name=state_data.get('name'),
+                        customer_name=state_data.get('name'),
+                        phone=state_data.get('phone'),
+                        delivery_address=state_data.get('address')
+                    )
+                    session.add(new_user)
+            except Exception:
+                # Игнорируем проблемы с обновлением профиля, чтобы не мешать оформлению заказа
+                pass
             
             # Очищаем корзину
             await session.execute(
@@ -1195,9 +1316,8 @@ async def show_order_details(callback: CallbackQuery, session: AsyncSession):
         
         # Получаем товары из этого заказа
         items_result = await session.execute(
-            select(CartItem, Product)
-            .join(Product, CartItem.product_id == Product.id)
-            .where(CartItem.order_id == order_id)
+            select(OrderItem)
+            .where(OrderItem.order_id == order_id)
         )
         items = items_result.scalars().all()
         
@@ -1217,19 +1337,11 @@ async def show_order_details(callback: CallbackQuery, session: AsyncSession):
         
         # Добавляем товары
         for item in items:
-            product = await session.get(Product, item.product_id)
-            if not product:
-                continue
-                
-            # Определяем цену (розничная или оптовая)
-            price = product.wholesale_price  # По умолчанию розничная цена
-            price_type = "опт"
-            
             message_text += (
-                f"🍅 <b>{product.name}</b>\n"
-                f"├ Цена ({price_type}): {price} ₽/кг\n"
+                f"🍅 <b>{item.product_name}</b>\n"
+                f"├ Цена: {item.price} ₽\n"
                 f"├ Количество: {item.quantity} кг\n"
-                f"└ Сумма: {price * item.quantity} ₽\n"
+                f"└ Сумма: {item.price * item.quantity} ₽\n"
                 "━━━━━━━━━━━━━━━━━━━━\n"
             )
         
@@ -1238,7 +1350,7 @@ async def show_order_details(callback: CallbackQuery, session: AsyncSession):
         # Создаем кнопки
         builder = InlineKeyboardBuilder()
         builder.row(
-            InlineKeyboardButton(text="🔙 К списку заказов", callback_data="my_orders"),
+            InlineKeyboardButton(text="🔙 К списку заказов", callback_data="profile"),
             width=1
         )
         
@@ -1251,3 +1363,54 @@ async def show_order_details(callback: CallbackQuery, session: AsyncSession):
         
     except Exception as e:
         await callback.answer("⚠️ Ошибка при загрузке деталей заказа", show_alert=True)
+
+
+@router.callback_query(F.data == "profile")
+async def show_profile(callback: CallbackQuery, session: AsyncSession):
+    try:
+        # Получаем данные пользователя
+        user = await session.scalar(select(User).where(User.telegram_id == callback.from_user.id))
+        phone = getattr(user, 'phone', None) or 'Не указан'
+        address = getattr(user, 'delivery_address', None) or 'Не указан'
+
+        # Получаем заказы пользователя
+        orders = await session.execute(
+            select(Order)
+            .where(Order.user_id == callback.from_user.id)
+            .order_by(Order.created_at.desc())
+        )
+        orders = orders.scalars().all()
+
+        # Формируем клавиатуру с заказами
+        builder = InlineKeyboardBuilder()
+        for order in orders:
+            builder.row(
+                InlineKeyboardButton(
+                    text=f"🛒 Заказ №{order.id} | {order.amount} ₽ | {order.status}",
+                    callback_data=f"order_detail_{order.id}"
+                )
+            )
+        builder.row(
+            InlineKeyboardButton(text="🔙 На главную", callback_data="back_to_main")
+        )
+
+        header_text = (
+            f"👤 <b>Мой профиль</b>\n\n"
+            f"📛 <b>Имя:</b> {user.first_name if user else ''} {user.last_name if user else ''}\n"
+            f"📞 <b>Телефон:</b> {phone}\n"
+            f"📍 <b>Адрес:</b> {address}\n\n"
+            f"📦 <b>Ваши заказы:</b>"
+        )
+
+        try:
+            await callback.message.edit_text(header_text, reply_markup=builder.as_markup(), parse_mode="HTML")
+        except TelegramBadRequest:
+            try:
+                await callback.message.delete()
+            except:
+                pass
+            await callback.message.answer(header_text, reply_markup=builder.as_markup(), parse_mode="HTML")
+
+        await callback.answer()
+    except Exception as e:
+        await callback.answer("⚠️ Не удалось загрузить профиль", show_alert=True)

@@ -1,6 +1,6 @@
 import asyncio
 from typing import Dict, List, Optional
-from sqlalchemy import BigInteger, Column, Index, Integer, Numeric, String, Float, DateTime, ForeignKey, Boolean, select, func, update
+from sqlalchemy import BigInteger, Column, Index, Integer, Numeric, String, Float, DateTime, ForeignKey, Boolean, select, func, update, inspect, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
@@ -20,10 +20,13 @@ class User(Base):
     __tablename__ = 'users'
     
     id = Column(Integer, primary_key=True)
-    telegram_id = Column(Integer, unique=True, nullable=False)
+    telegram_id = Column(BigInteger, unique=True, nullable=False)
     username = Column(String)
     first_name = Column(String)
     last_name = Column(String)
+    customer_name = Column(String(100))
+    phone = Column(String(20))
+    delivery_address = Column(String(200))
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Product(Base):
@@ -48,7 +51,7 @@ class CartItem(Base):
     __tablename__ = 'cart_items'
     
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    user_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False)
     order_id = Column(Integer, ForeignKey("orders.id"))
     product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
     product_name = Column(String(100)) 
@@ -75,12 +78,12 @@ class Order(Base):
     __tablename__ = 'orders'
     
     id = Column(Integer, primary_key=True)
-    user_id = Column(BigInteger, nullable=False)
-    payment_id = Column(String)  # Telegram user_id обычно bigint
+    user_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False)
+    payment_id = Column(String)  # ID платежа
     amount = Column(Numeric(10, 2), nullable=False)  # Лучше для денег, чем Float
-    customer_name = Column(String(100), nullable=False)  # Ограничение длины
-    customer_phone = Column(String(20), nullable=False)  # + и цифры занимают место
-    delivery_address = Column(String(200), nullable=False)
+    customer_name = Column(String(100), nullable=False)
+    customer_phone = Column(String(20), nullable=False)
+    delivery_address = Column(String(200))
     delivery_time = Column(String(20))  # "morning", "afternoon" etc.
     status = Column(String(20), default='new', nullable=False)
     created_at = Column(DateTime, server_default=func.now())
@@ -111,7 +114,23 @@ class Database:
         """Инициализация базы данных"""
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(self._apply_sqlite_migrations)
     
+    def _apply_sqlite_migrations(self, conn):
+        """Применение необходимых миграций для SQLite при изменении схемы."""
+        if conn.dialect.name != "sqlite":
+            return
+
+        inspector = inspect(conn)
+        if 'users' in inspector.get_table_names():
+            existing_columns = {col['name'] for col in inspector.get_columns('users')}
+            if 'phone' not in existing_columns:
+                conn.execute(text('ALTER TABLE users ADD COLUMN phone VARCHAR(20)'))
+            if 'delivery_address' not in existing_columns:
+                conn.execute(text('ALTER TABLE users ADD COLUMN delivery_address VARCHAR(200)'))
+            if 'customer_name' not in existing_columns:
+                conn.execute(text('ALTER TABLE users ADD COLUMN customer_name VARCHAR(100)'))
+
     async def close(self):
         """Закрытие соединения с базой данных"""
         await self.engine.dispose()
@@ -125,19 +144,30 @@ class Database:
             return result.scalar_one_or_none()
     
     async def create_user(self, telegram_id: int, username: str = None, 
-                         first_name: str = None, last_name: str = None):
+                         first_name: str = None, last_name: str = None, phone: str = None, delivery_address: str = None):
         """Создание нового пользователя"""
         async with self.async_session() as session:
             user = User(
                 telegram_id=telegram_id,
                 username=username,
                 first_name=first_name,
-                last_name=last_name
+                last_name=last_name,
+                phone=phone,
+                delivery_address=delivery_address
             )
             session.add(user)
             await session.commit()
             return user
 
+    async def get_cart(self, telegram_id: int):
+        """Возвращает список кортежей (CartItem, Product) для указанного telegram_id"""
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(CartItem, Product)
+                .join(Product, CartItem.product_id == Product.id)
+                .where(CartItem.user_id == telegram_id)
+            )
+            return result.all()
 
 
     
