@@ -844,21 +844,64 @@ async def start_checkout(callback: CallbackQuery, state: FSMContext, session: As
         if not total:
             await callback.answer("Ваша корзина пуста", show_alert=True)
             return
-            
+
         await state.update_data(total=total)
-        
+
+        # Если у пользователя уже есть сохранённые данные с прошлого заказа - предлагаем их использовать
+        db_user = await session.scalar(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        if db_user and db_user.customer_name and db_user.phone and db_user.delivery_address:
+            await state.update_data(
+                name=db_user.customer_name,
+                phone=db_user.phone,
+                address=db_user.delivery_address
+            )
+            builder = InlineKeyboardBuilder()
+            builder.row(InlineKeyboardButton(text="✅ Всё верно, продолжить", callback_data="checkout_use_saved"))
+            builder.row(InlineKeyboardButton(text="✏️ Изменить данные", callback_data="checkout_edit_data"))
+            builder.row(InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_order"))
+            await callback.message.answer(
+                "Оформить заказ на сохранённые данные?\n\n"
+                f"👤 Имя: {db_user.customer_name}\n"
+                f"📞 Телефон: {db_user.phone}\n"
+                f"📍 Адрес: {db_user.delivery_address}",
+                reply_markup=builder.as_markup()
+            )
+            await callback.answer()
+            return
+
         builder = InlineKeyboardBuilder()
         builder.add(InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_order"))
-        
+
         await callback.message.answer(
             "Введите ваше имя:",
             reply_markup=builder.as_markup()
         )
         await state.set_state(OrderStates.WAITING_NAME)
         await callback.answer()
-        
+
     except Exception as e:
         await callback.answer("⚠️ Ошибка при оформлении заказа", show_alert=True)
+
+@router.callback_query(F.data == "checkout_use_saved")
+async def checkout_use_saved(callback: CallbackQuery, state: FSMContext):
+    """Пользователь подтвердил использование сохранённых данных - сразу переходим к выбору времени доставки"""
+    await callback.answer()
+    await ask_delivery_time(callback.message, state)
+
+@router.callback_query(F.data == "checkout_edit_data")
+async def checkout_edit_data(callback: CallbackQuery, state: FSMContext):
+    """Пользователь хочет ввести данные заново"""
+    builder = InlineKeyboardBuilder()
+    builder.add(InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_order"))
+
+    await callback.message.answer(
+        "Введите ваше имя:",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(OrderStates.WAITING_NAME)
+    await callback.answer()
 
 @router.message(OrderStates.WAITING_NAME)
 async def process_name(message: Message, state: FSMContext):
@@ -938,15 +981,8 @@ async def safe_answer_callback(callback: CallbackQuery, text: str = None, show_a
             return False
         raise
 
-@router.message(OrderStates.WAITING_ADDRESS, F.text)
-async def process_address(message: Message, state: FSMContext):
-    address = message.text.strip()
-    if not address:
-        await message.answer("Пожалуйста, введите адрес текстом")
-        return
-        
-    await state.update_data(address=address)
-    
+async def ask_delivery_time(message: Message, state: FSMContext):
+    """Показывает выбор интервала доставки (общий шаг для ручного ввода и сохранённых данных)"""
     builder = InlineKeyboardBuilder()
     time_slots = [
         ("Утро (9-12)", "delivery_morning"),
@@ -955,14 +991,24 @@ async def process_address(message: Message, state: FSMContext):
     ]
     for text, callback_data in time_slots:
         builder.row(InlineKeyboardButton(text=text, callback_data=callback_data))
-    
+
     builder.row(InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_order"))
-    
+
     await message.answer(
         "Выберите удобный интервал доставки:",
         reply_markup=builder.as_markup()
     )
     await state.set_state(OrderStates.WAITING_DELIVERY_TIME)
+
+@router.message(OrderStates.WAITING_ADDRESS, F.text)
+async def process_address(message: Message, state: FSMContext):
+    address = message.text.strip()
+    if not address:
+        await message.answer("Пожалуйста, введите адрес текстом")
+        return
+
+    await state.update_data(address=address)
+    await ask_delivery_time(message, state)
 
 # Добавляем функцию для преобразования callback_data в читаемый текст
 def get_delivery_time_text(callback_data: str) -> str:
@@ -1109,10 +1155,12 @@ async def check_payment_handler(
                 )
                 session.add(order_item)
             
-            # Обновляем информацию о пользователе (сохраняем телефон и адрес)
+            # Обновляем информацию о пользователе (сохраняем имя, телефон и адрес для будущих заказов)
             try:
                 db_user = await session.scalar(select(User).where(User.telegram_id == user_id))
                 if db_user:
+                    if state_data.get('name'):
+                        db_user.customer_name = state_data.get('name')
                     if state_data.get('phone'):
                         db_user.phone = state_data.get('phone')
                     if state_data.get('address'):
@@ -1122,6 +1170,7 @@ async def check_payment_handler(
                     new_user = User(
                         telegram_id=user_id,
                         first_name=state_data.get('name'),
+                        customer_name=state_data.get('name'),
                         phone=state_data.get('phone'),
                         delivery_address=state_data.get('address')
                     )

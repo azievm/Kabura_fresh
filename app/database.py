@@ -24,6 +24,7 @@ class User(Base):
     username = Column(String)
     first_name = Column(String)
     last_name = Column(String)
+    customer_name = Column(String(100))
     phone = Column(String(20))
     delivery_address = Column(String(200))
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -127,6 +128,8 @@ class Database:
                 conn.execute(text('ALTER TABLE users ADD COLUMN phone VARCHAR(20)'))
             if 'delivery_address' not in existing_columns:
                 conn.execute(text('ALTER TABLE users ADD COLUMN delivery_address VARCHAR(200)'))
+            if 'customer_name' not in existing_columns:
+                conn.execute(text('ALTER TABLE users ADD COLUMN customer_name VARCHAR(100)'))
 
     async def close(self):
         """Закрытие соединения с базой данных"""
