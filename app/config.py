@@ -41,3 +41,7 @@ ITEMS_PER_PAGE = int(os.getenv('ITEMS_PER_PAGE', '5'))
 
 # ID чата для уведомлений
 NOTIFICATION_CHAT_ID = int(os.getenv('NOTIFICATION_CHAT_ID', '-1002579340956'))
+
+# Настройки HTTP API (Mini App)
+API_HOST = os.getenv('API_HOST', '0.0.0.0')
+API_PORT = int(os.getenv('API_PORT', '8080'))
