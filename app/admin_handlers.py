@@ -1,3 +1,4 @@
+import logging
 from typing import Union
 from aiogram import F, Bot, Router
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
@@ -13,6 +14,9 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import ContentType
 
 admin = Router()
+
+logger = logging.getLogger(__name__)
+
 async def is_admin(user_id: int):
     return user_id in ADMIN_IDS
 
@@ -284,6 +288,7 @@ async def start_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot, 
                 )
             success += 1
         except Exception as e:
+            logger.warning("Рассылка: не удалось отправить пользователю %s: %s", user_id, e)
             failed += 1
             continue
     
@@ -658,9 +663,9 @@ async def complete_order(callback: CallbackQuery, session: AsyncSession, bot: Bo
             ])
         )
         
-    except Exception as e:
+    except Exception:
         await session.rollback()
-        print(f"Ошибка при удалении заказа: {e}")
+        logger.exception("Ошибка при завершении заказа %s", order_id)
         await callback.answer("❌ Ошибка при удалении заказа", show_alert=True)
 
 @admin.callback_query(F.data.startswith("admin_user_cart_"))

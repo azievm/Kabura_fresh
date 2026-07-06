@@ -95,6 +95,14 @@ class Order(Base):
         Index('ix_orders_status', 'status'),
     )
     
+class FSMData(Base):
+    """Персистентное хранилище состояний FSM (переживает рестарт бота)"""
+    __tablename__ = 'fsm_data'
+
+    key = Column(String, primary_key=True)
+    state = Column(String)
+    data = Column(String)  # JSON
+
 class Database:
     def __init__(self):
         # Убедимся, что URL правильный

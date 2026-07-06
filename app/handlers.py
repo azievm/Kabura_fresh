@@ -1,4 +1,5 @@
 from datetime import datetime
+import logging
 import re
 from typing import Dict,List
 from aiogram import Bot, Router, F
@@ -43,6 +44,8 @@ from .config import ADMIN_IDS, PAYMENT_SHOP_ID, PAYMENT_SECRET_KEY, ITEMS_PER_PA
 # Создаем роутер
 router = Router()
 
+logger = logging.getLogger(__name__)
+
 payment_system = None
 if PAYMENT_SHOP_ID and PAYMENT_SECRET_KEY:
     payment_system = PaymentSystem(
@@ -51,7 +54,7 @@ if PAYMENT_SHOP_ID and PAYMENT_SECRET_KEY:
     )
 else:
     # Если ключи не настроены, при оформлении заказа появится понятное сообщение.
-    print("PAYMENT_SHOP_ID или PAYMENT_SECRET_KEY не настроены. Платежная система отключена.")
+    logger.warning("PAYMENT_SHOP_ID или PAYMENT_SECRET_KEY не настроены. Платежная система отключена.")
 
 
 # Состояния FSM для оформления заказа
@@ -581,7 +584,8 @@ async def add_to_cart(callback: CallbackQuery, session: AsyncSession):
         )
         await product_message.edit_reply_markup(reply_markup=reply_markup)
         
-    except Exception as e:
+    except Exception:
+        logger.exception("Ошибка при добавлении товара в корзину (user_id=%s)", callback.from_user.id)
         await callback.answer("⚠️ Ошибка при добавлении в корзину", show_alert=True)
         await session.rollback()
 
@@ -603,7 +607,8 @@ async def view_cart(callback: CallbackQuery, session: AsyncSession):
         await callback.answer("Открываю корзину...")
         await show_cart_page(callback.message, session, user_id, 0)
         
-    except Exception as e:
+    except Exception:
+        logger.exception("Ошибка при открытии корзины (user_id=%s)", callback.from_user.id)
         await callback.answer("⚠️ Ошибка при открытии корзины", show_alert=True)
 
 async def show_cart_page(message: Message, session: AsyncSession, user_id: int, page: int = 0, items_per_page: int = 5):
@@ -691,7 +696,8 @@ async def show_cart_page(message: Message, session: AsyncSession, user_id: int, 
         )
         return total
         
-    except Exception as e:
+    except Exception:
+        logger.exception("Ошибка при отображении корзины (user_id=%s)", user_id)
         await message.answer("⚠️ Произошла ошибка при загрузке корзины")
 
         
@@ -881,7 +887,8 @@ async def start_checkout(callback: CallbackQuery, state: FSMContext, session: As
         await state.set_state(OrderStates.WAITING_NAME)
         await callback.answer()
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Ошибка при старте оформления заказа (user_id=%s)", callback.from_user.id)
         await callback.answer("⚠️ Ошибка при оформлении заказа", show_alert=True)
 
 @router.callback_query(F.data == "checkout_use_saved")
@@ -1082,7 +1089,8 @@ async def process_delivery_time(
         
         await state.update_data(payment_message_id=payment_message.message_id)
         
-    except Exception as e:
+    except Exception:
+        logger.exception("Ошибка при создании платежа (user_id=%s)", user_id)
         await callback.message.answer("⚠️ Ошибка при создании платежа. Пожалуйста, попробуйте снова.")
         
 @router.callback_query(F.data == "check_payment")
@@ -1197,7 +1205,8 @@ async def check_payment_handler(
         else:
             await callback.answer("❌ Оплата не прошла или еще обрабатывается", show_alert=True)
             
-    except Exception as e:
+    except Exception:
+        logger.exception("Ошибка при обработке оплаченного заказа (user_id=%s, payment_id=%s)", user_id, payment_id)
         await session.rollback()
         await callback.answer("⚠️ Ошибка при обработке заказа", show_alert=True)
 
@@ -1230,10 +1239,11 @@ async def send_admin_notification(bot: Bot, order: Order, cart_items: list):
                     text=admin_text,
                     parse_mode="HTML"
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning("Не удалось уведомить админа %s о заказе #%s: %s", admin, order.id, e)
                 continue
-    except Exception as e:
-        pass
+    except Exception:
+        logger.exception("Ошибка при отправке уведомления о заказе #%s", order.id)
 
 @router.callback_query(F.data == "cancel_order")
 async def cancel_order(callback: CallbackQuery, state: FSMContext):
@@ -1294,7 +1304,8 @@ async def show_user_orders(callback: CallbackQuery, session: AsyncSession):
         
         await callback.answer()
         
-    except Exception as e:
+    except Exception:
+        logger.exception("Ошибка при загрузке заказов (user_id=%s)", callback.from_user.id)
         await callback.answer("⚠️ Не удалось загрузить заказы", show_alert=True)
 
 @router.callback_query(F.data.startswith("order_detail_"))
@@ -1361,7 +1372,8 @@ async def show_order_details(callback: CallbackQuery, session: AsyncSession):
             parse_mode="HTML"
         )
         
-    except Exception as e:
+    except Exception:
+        logger.exception("Ошибка при загрузке деталей заказа (user_id=%s)", callback.from_user.id)
         await callback.answer("⚠️ Ошибка при загрузке деталей заказа", show_alert=True)
 
 
@@ -1412,5 +1424,6 @@ async def show_profile(callback: CallbackQuery, session: AsyncSession):
             await callback.message.answer(header_text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
         await callback.answer()
-    except Exception as e:
+    except Exception:
+        logger.exception("Ошибка при загрузке профиля (user_id=%s)", callback.from_user.id)
         await callback.answer("⚠️ Не удалось загрузить профиль", show_alert=True)

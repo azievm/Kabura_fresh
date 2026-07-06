@@ -1,7 +1,7 @@
 from yookassa import Configuration, Payment, Refund
 from datetime import datetime
+import logging
 import uuid
-import traceback
 from typing import Dict, Optional, Literal, Tuple, List, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
@@ -11,6 +11,8 @@ from .shema import OrderCreate
 from .database import Order, CartItem, OrderItem, Product, User
 
 PaymentStatus = Literal["pending", "waiting_for_capture", "succeeded", "canceled"]
+
+logger = logging.getLogger(__name__)
 
 class PaymentSystem:
     def __init__(self, shop_id: str, secret_key: str):
@@ -84,9 +86,8 @@ class PaymentSystem:
                 "confirmation_url": payment.confirmation.confirmation_url,
                 "amount": float(payment.amount.value)
             }
-        except Exception as e:
-            print(f"PaymentSystem.create_payment error: {type(e).__name__}: {e}")
-            traceback.print_exc()
+        except Exception:
+            logger.exception("PaymentSystem.create_payment error")
             return None
 
     async def check_payment_status(self, payment_id: str) -> Optional[PaymentStatus]:
@@ -94,7 +95,8 @@ class PaymentSystem:
         try:
             payment = Payment.find_one(payment_id)
             return payment.status
-        except Exception as e:
+        except Exception:
+            logger.exception("Не удалось проверить статус платежа %s", payment_id)
             return None
     
     async def verify_payment_success(self, payment_id: str) -> bool:
@@ -102,7 +104,8 @@ class PaymentSystem:
         try:
             status = await self.check_payment_status(payment_id)
             return status == "succeeded"
-        except Exception as e:
+        except Exception:
+            logger.exception("Ошибка при проверке оплаты %s", payment_id)
             return False
 
     async def refund_payment(self, payment_id: str) -> bool:
@@ -116,7 +119,8 @@ class PaymentSystem:
                 })
                 return refund.status == "succeeded"
             return False
-        except Exception as e:
+        except Exception:
+            logger.exception("Ошибка при возврате платежа %s", payment_id)
             return False
 
     async def create_order_after_payment(
@@ -258,6 +262,6 @@ class PaymentSystem:
         if payment_id:
             refund_success = await self.refund_payment(payment_id)
             if refund_success:
-                pass # No logging for refund success
+                logger.info("Платёж %s возвращён после сбоя создания заказа", payment_id)
             else:
-                pass # No logging for refund failure
+                logger.error("Не удалось вернуть платёж %s после сбоя создания заказа", payment_id)
