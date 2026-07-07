@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Header } from "./components/Header.jsx";
 import { Catalog } from "./screens/Catalog.jsx";
 import { Cart } from "./screens/Cart.jsx";
+import { Profile } from "./screens/Profile.jsx";
 import { api } from "./lib/api.js";
 import { tg, haptic } from "./lib/telegram.js";
 import { formatPrice } from "./lib/format.js";
@@ -9,7 +10,7 @@ import { formatPrice } from "./lib/format.js";
 const GREEN = "#2E7D46";
 
 export function App() {
-  const [screen, setScreen] = useState("catalog"); // 'catalog' | 'cart'
+  const [screen, setScreen] = useState("catalog"); // 'catalog' | 'cart' | 'profile'
   const [categories, setCategories] = useState([]);
   const [activeCategory, setActiveCategory] = useState(null);
   const [products, setProducts] = useState([]);
@@ -17,6 +18,9 @@ export function App() {
   const [error, setError] = useState(false);
   const [cart, setCart] = useState({ items: [], total: 0, count: 0 });
   const [cartBusy, setCartBusy] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState(false);
 
   // Категории + корзина при старте
   useEffect(() => {
@@ -45,6 +49,22 @@ export function App() {
       cancelled = true;
     };
   }, [activeCategory]);
+
+  // Профиль подгружаем при входе на экран (свежая история заказов)
+  useEffect(() => {
+    if (screen !== "profile") return;
+    let cancelled = false;
+    setProfileLoading(true);
+    setProfileError(false);
+    api
+      .profile()
+      .then((data) => !cancelled && setProfile(data))
+      .catch(() => !cancelled && setProfileError(true))
+      .finally(() => !cancelled && setProfileLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [screen]);
 
   // --- операции с корзиной ---
   const runCart = useCallback(async (fn) => {
@@ -76,11 +96,11 @@ export function App() {
     return runCart(() => api.clearCart());
   }, [runCart]);
 
-  // --- Telegram BackButton: показываем на экране корзины ---
+  // --- Telegram BackButton: на любом экране кроме каталога ---
   useEffect(() => {
     const bb = tg?.BackButton;
     if (!bb) return;
-    if (screen === "cart") {
+    if (screen !== "catalog") {
       const go = () => setScreen("catalog");
       bb.show();
       bb.onClick(go);
@@ -92,17 +112,12 @@ export function App() {
     bb.hide();
   }, [screen]);
 
-  // --- Telegram MainButton: контекстный, зелёный ---
+  // --- Telegram MainButton: контекстный, зелёный (только каталог/корзина) ---
   useEffect(() => {
     const mb = tg?.MainButton;
     if (!mb) return;
 
-    if (cart.count === 0) {
-      mb.hide();
-      return;
-    }
-
-    if (screen === "catalog") {
+    if (screen === "catalog" && cart.count > 0) {
       mb.setParams({
         text: `Корзина · ${cart.count} · ${formatPrice(cart.total)}`,
         color: GREEN,
@@ -114,27 +129,31 @@ export function App() {
       return () => mb.offClick(go);
     }
 
-    // screen === 'cart'
-    mb.setParams({
-      text: `Оформить заказ · ${formatPrice(cart.total)}`,
-      color: GREEN,
-      text_color: "#FFFFFF",
-      is_visible: true,
-    });
-    const checkout = () =>
-      tg?.showAlert
-        ? tg.showAlert("Оформление заказа скоро будет доступно.")
-        : undefined;
-    mb.onClick(checkout);
-    return () => mb.offClick(checkout);
+    if (screen === "cart" && cart.count > 0) {
+      mb.setParams({
+        text: `Оформить заказ · ${formatPrice(cart.total)}`,
+        color: GREEN,
+        text_color: "#FFFFFF",
+        is_visible: true,
+      });
+      const checkout = () => tg?.showAlert?.("Оформление заказа скоро будет доступно.");
+      mb.onClick(checkout);
+      return () => mb.offClick(checkout);
+    }
+
+    mb.hide();
   }, [screen, cart.count, cart.total]);
 
   const cartIds = new Set(cart.items.map((i) => i.product_id));
 
   return (
     <>
-      <Header cartCount={cart.count} onCart={() => setScreen("cart")} />
-      {screen === "catalog" ? (
+      <Header
+        cartCount={cart.count}
+        onCart={() => setScreen("cart")}
+        onProfile={() => setScreen("profile")}
+      />
+      {screen === "catalog" && (
         <Catalog
           categories={categories}
           activeCategory={activeCategory}
@@ -145,7 +164,8 @@ export function App() {
           cartIds={cartIds}
           onAdd={handleAdd}
         />
-      ) : (
+      )}
+      {screen === "cart" && (
         <Cart
           cart={cart}
           busy={cartBusy}
@@ -155,6 +175,9 @@ export function App() {
           onClear={handleClear}
           onBrowse={() => setScreen("catalog")}
         />
+      )}
+      {screen === "profile" && (
+        <Profile profile={profile} loading={profileLoading} error={profileError} />
       )}
     </>
   );

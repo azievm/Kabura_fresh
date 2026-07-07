@@ -14,6 +14,26 @@ export function unitsForCategory(category) {
   return { retail: "кг", wholesale: "ящик" };
 }
 
+// Дата заказа: ISO -> «7 июля 2026».
+export function formatDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+}
+
+// Человекочитаемые статусы заказа. tone: 'ok' | 'muted' — для цвета плашки.
+export const ORDER_STATUS = {
+  new: { label: "Новый", tone: "muted" },
+  paid: { label: "Оплачен", tone: "ok" },
+  completed: { label: "Выполнен", tone: "ok" },
+  cancelled: { label: "Отменён", tone: "muted" },
+};
+
+export function orderStatus(status) {
+  return ORDER_STATUS[status] || { label: status, tone: "muted" };
+}
+
 export const CATEGORY_EMOJI = {
   fruits: "🍎",
   vegetables: "🥕",

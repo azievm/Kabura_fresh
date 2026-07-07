@@ -1,0 +1,87 @@
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.num {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.status {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-control);
+}
+.ok {
+  color: var(--green);
+  background: var(--green-tint);
+}
+.muted {
+  color: var(--text-muted);
+  background: var(--surface-2);
+}
+
+.date {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: -4px;
+}
+
+.items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.itemName {
+  color: var(--text);
+  min-width: 0;
+}
+
+.mult {
+  color: var(--text-muted);
+}
+
+.total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 15px;
+}
+
+.totalValue {
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.addr {
+  font-size: 13px;
+  color: var(--text-muted);
+}

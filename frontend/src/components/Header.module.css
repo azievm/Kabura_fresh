@@ -23,7 +23,13 @@
   margin-left: 3px;
 }
 
-.cart {
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.iconBtn {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -33,7 +39,7 @@
   border-radius: var(--radius-control);
   color: var(--text);
 }
-.cart:active {
+.iconBtn:active {
   transform: scale(0.96);
 }
 

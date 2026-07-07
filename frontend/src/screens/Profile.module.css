@@ -1,0 +1,116 @@
+.screen {
+  padding: 16px 16px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.user {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 16px;
+}
+
+.name {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.username {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.fields {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.icon {
+  color: var(--green);
+  flex: 0 0 auto;
+}
+
+.heading {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 4px 2px 0;
+}
+
+.orders {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.emptyOrders {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 36px 24px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+.emptyIcon {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.state {
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--text);
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.skeletonCard {
+  height: 150px;
+  border-radius: var(--radius-card);
+  background: linear-gradient(
+    100deg,
+    var(--surface-2) 30%,
+    var(--surface) 50%,
+    var(--surface-2) 70%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeletonCard {
+    animation: none;
+  }
+}
