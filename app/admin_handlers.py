@@ -378,7 +378,34 @@ async def format_order_keyboard(order: Order) -> InlineKeyboardMarkup:
         )
     keyboard_buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-    
+
+
+def _user_title(user) -> str:
+    info = f"{user.first_name or ''} {user.last_name or ''}".strip()
+    if user.username:
+        info += f" (@{user.username})"
+    return f"📦 Заказы пользователя {info or 'без имени'}:"
+
+
+def _user_orders_markup(user, orders, back_cb: str) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(
+            text=f"#{o.id} | {o.amount} ₽ | {o.status} | {o.created_at.strftime('%d.%m')}",
+            callback_data=f"admin_order_{o.id}",
+        )]
+        for o in orders
+    ]
+    rows.append([InlineKeyboardButton(text="🛒 Показать корзину", callback_data=f"admin_user_cart_{user.telegram_id}")])
+    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data=back_cb)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _fetch_user_orders(telegram_id: int, session: AsyncSession):
+    result = await session.execute(
+        select(Order).where(Order.user_id == telegram_id).order_by(Order.created_at.desc())
+    )
+    return result.scalars().all()
+
 
 @admin.message(SearchOrder.waiting_for_search_term, F.text)
 async def process_search_term(message: Message, state: FSMContext, session: AsyncSession):
@@ -394,7 +421,7 @@ async def process_search_term(message: Message, state: FSMContext, session: Asyn
             await state.clear()
             return
         else:
-            await message.answer("❌ Заказ с таким ID не найден", show_alert=True)
+            await message.answer("❌ Заказ с таким ID не найден")
             return
 
     # Остальная логика поиска по пользователям (как было)
@@ -426,12 +453,20 @@ async def process_search_term(message: Message, state: FSMContext, session: Asyn
             users = users.scalars().all()
 
     if not users:
-        await message.answer("❌ Пользователи не найдены", show_alert=True)
+        await message.answer("❌ Пользователи не найдены")
         await state.clear()
         return
 
     if len(users) == 1:
-        await show_user_orders(message, users[0], session)
+        user = users[0]
+        orders = await _fetch_user_orders(user.telegram_id, session)
+        if not orders:
+            await message.answer(f"У пользователя {_user_title(user)[21:]} нет заказов")
+        else:
+            await message.answer(
+                _user_title(user),
+                reply_markup=_user_orders_markup(user, orders, "admin_back"),
+            )
         await state.clear()
         return
 
@@ -524,34 +559,15 @@ async def show_user_orders(callback: CallbackQuery, session: AsyncSession):
         await callback.answer("❌ Пользователь не найден", show_alert=True)
         return
     
-    orders = await session.execute(
-        select(Order)
-        .where(Order.user_id == telegram_id)  # Используем telegram_id как user_id
-        .order_by(Order.created_at.desc())
-    )
-    orders = orders.scalars().all()
-    
+    orders = await _fetch_user_orders(telegram_id, session)
+
     if not orders:
         await callback.answer("❌ У пользователя нет заказов", show_alert=True)
         return
-    
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=f"#{o.id} | {o.amount} ₽ | {o.status} | {o.created_at.strftime('%d.%m')}",
-            callback_data=f"admin_order_{o.id}"
-        )] for o in orders
-    ] + [
-        [InlineKeyboardButton(text="🛒 Показать корзину", callback_data=f"admin_user_cart_{telegram_id}")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_all_orders")]
-    ])
-    
-    user_info = f"{user.first_name or ''} {user.last_name or ''}"
-    if user.username:
-        user_info += f" (@{user.username})"
-    
+
     await callback.message.edit_text(
-        f"📦 Заказы пользователя {user_info}:",
-        reply_markup=keyboard
+        _user_title(user),
+        reply_markup=_user_orders_markup(user, orders, "admin_all_orders"),
     )
     await callback.answer()
     
