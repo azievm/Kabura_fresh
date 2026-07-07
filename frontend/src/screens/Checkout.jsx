@@ -47,7 +47,7 @@ export function Checkout({ cartTotal, defaults, onSuccess }) {
     setBusy(true);
     setError("");
     try {
-      const res = await api.confirmPayment({ ...payment.form, payment_id: payment.payment_id });
+      const res = await api.confirmPayment(payment.payment_id);
       if (res.status === "ok") {
         haptic("medium");
         onSuccess(res.order_id);

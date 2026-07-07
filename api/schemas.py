@@ -120,10 +120,10 @@ class CheckoutOut(BaseModel):
     amount: float
 
 
-class ConfirmIn(CheckoutIn):
+class ConfirmIn(BaseModel):
     payment_id: str
 
 
 class ConfirmOut(BaseModel):
-    status: str  # 'ok' — заказ создан, 'pending' — оплата ещё не прошла
+    status: str  # 'ok' — оплата подтверждена, 'pending' — оплата ещё не прошла
     order_id: Optional[int] = None

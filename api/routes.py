@@ -96,7 +96,9 @@ async def profile(
 
     orders = (
         await session.scalars(
-            select(Order).where(Order.user_id == user_id).order_by(Order.created_at.desc())
+            select(Order)
+            .where(Order.user_id == user_id, Order.status != "pending")
+            .order_by(Order.created_at.desc())
         )
     ).all()
 
@@ -296,11 +298,15 @@ async def checkout(
     user_id: int = Depends(get_user_id),
     session: AsyncSession = Depends(get_session),
 ) -> CheckoutOut:
-    """Создаёт платёж YooKassa для текущей корзины и сохраняет данные в профиль.
-    Сам заказ создаётся только после подтверждения оплаты (см. /payment/confirm)."""
+    """Создаёт платёж YooKassa и заказ со статусом 'pending' (снимок корзины).
+    Заказ становится 'paid' после подтверждения оплаты — из webhook или /payment/confirm."""
     cart_items = (
-        await session.scalars(select(CartItem).where(CartItem.user_id == user_id))
-    ).all()
+        await session.execute(
+            select(CartItem)
+            .where(CartItem.user_id == user_id)
+            .options(selectinload(CartItem.product))
+        )
+    ).scalars().all()
     if not cart_items:
         raise HTTPException(status_code=400, detail="cart is empty")
 
@@ -317,56 +323,10 @@ async def checkout(
     if not payment:
         raise HTTPException(status_code=502, detail="payment creation failed")
 
-    # Запоминаем контактные данные для будущих заказов (префилл), даже если оплату бросят.
-    user = await session.scalar(select(User).where(User.telegram_id == user_id))
-    if user:
-        user.customer_name = payload.name
-        user.phone = payload.phone
-        user.delivery_address = payload.address
-        await session.commit()
-
-    return CheckoutOut(
-        payment_id=payment["id"],
-        confirmation_url=payment["confirmation_url"],
-        amount=float(payment["amount"]),
-    )
-
-
-@router.post("/payment/confirm", response_model=ConfirmOut)
-async def confirm_payment(
-    payload: ConfirmIn,
-    request: Request,
-    user_id: int = Depends(get_user_id),
-    session: AsyncSession = Depends(get_session),
-) -> ConfirmOut:
-    """Проверяет оплату у YooKassa и при успехе создаёт заказ из текущей корзины.
-    Идемпотентно по payment_id — повторный вызов не создаёт дубль."""
-    existing = await session.scalar(select(Order).where(Order.payment_id == payload.payment_id))
-    if existing:
-        return ConfirmOut(status="ok", order_id=existing.id)
-
-    ps = bot_handlers.payment_system
-    if ps is None:
-        raise HTTPException(status_code=503, detail="payments are not configured")
-
-    if not await ps.verify_payment_success(payload.payment_id):
-        return ConfirmOut(status="pending")
-
-    cart_items = (
-        await session.execute(
-            select(CartItem)
-            .where(CartItem.user_id == user_id)
-            .options(selectinload(CartItem.product))
-        )
-    ).scalars().all()
-    if not cart_items:
-        raise HTTPException(status_code=400, detail="cart is empty")
-
-    total = sum(item.price * item.quantity for item in cart_items)
     order = Order(
         user_id=user_id,
-        payment_id=payload.payment_id,
-        status="paid",
+        payment_id=payment["id"],
+        status="pending",
         amount=total,
         customer_name=payload.name,
         customer_phone=payload.phone,
@@ -375,7 +335,6 @@ async def confirm_payment(
     )
     session.add(order)
     await session.flush()
-
     for item in cart_items:
         session.add(
             OrderItem(
@@ -387,21 +346,86 @@ async def confirm_payment(
             )
         )
 
+    # Запоминаем контактные данные для префилла будущих заказов.
     user = await session.scalar(select(User).where(User.telegram_id == user_id))
     if user:
         user.customer_name = payload.name
         user.phone = payload.phone
         user.delivery_address = payload.address
 
-    notify_items = list(cart_items)  # снимок до очистки корзины
-    await session.execute(delete(CartItem).where(CartItem.user_id == user_id))
     await session.commit()
 
-    bot = getattr(request.app.state, "bot", None)
+    return CheckoutOut(
+        payment_id=payment["id"],
+        confirmation_url=payment["confirmation_url"],
+        amount=float(payment["amount"]),
+    )
+
+
+async def _finalize_order(payment_id: str, session: AsyncSession, bot) -> "Order | None":
+    """Подтверждает оплату у YooKassa и переводит pending-заказ в 'paid':
+    очищает корзину и уведомляет админов. Идемпотентно, безопасно к повтору
+    (webhook и ручная проверка вызывают одно и то же)."""
+    order = await session.scalar(select(Order).where(Order.payment_id == payment_id))
+    if order is None:
+        return None
+    if order.status in ("paid", "completed"):
+        return order
+
+    ps = bot_handlers.payment_system
+    if ps is None or not await ps.verify_payment_success(payment_id):
+        return order  # оплата ещё не подтверждена — заказ остаётся pending
+
+    order.status = "paid"
+    await session.execute(delete(CartItem).where(CartItem.user_id == order.user_id))
+    items = (
+        await session.scalars(select(OrderItem).where(OrderItem.order_id == order.id))
+    ).all()
+    await session.commit()
+
     if bot is not None:
         try:
-            await bot_handlers.send_admin_notification(bot, order, notify_items)
+            await bot_handlers.send_admin_notification(bot, order, items)
         except Exception:
             logger.exception("Не удалось уведомить админов о заказе %s", order.id)
 
-    return ConfirmOut(status="ok", order_id=order.id)
+    return order
+
+
+@router.post("/payment/confirm", response_model=ConfirmOut)
+async def confirm_payment(
+    payload: ConfirmIn,
+    request: Request,
+    user_id: int = Depends(get_user_id),
+    session: AsyncSession = Depends(get_session),
+) -> ConfirmOut:
+    """Ручная проверка оплаты (fallback к webhook). Идемпотентна."""
+    order = await session.scalar(select(Order).where(Order.payment_id == payload.payment_id))
+    if order is None or order.user_id != user_id:
+        raise HTTPException(status_code=404, detail="order not found")
+
+    bot = getattr(request.app.state, "bot", None)
+    order = await _finalize_order(payload.payment_id, session, bot)
+    status = "ok" if order and order.status in ("paid", "completed") else "pending"
+    return ConfirmOut(status=status, order_id=order.id if order else None)
+
+
+@router.post("/yookassa/webhook")
+async def yookassa_webhook(request: Request, session: AsyncSession = Depends(get_session)) -> Dict[str, bool]:
+    """Приём уведомлений YooKassa (payment.succeeded и т.п.).
+    Статусу из тела НЕ доверяем — перепроверяем платёж через API в _finalize_order."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False}
+
+    payment_id = ((body or {}).get("object") or {}).get("id")
+    if not payment_id:
+        return {"ok": True}
+
+    bot = getattr(request.app.state, "bot", None)
+    try:
+        await _finalize_order(payment_id, session, bot)
+    except Exception:
+        logger.exception("Ошибка обработки webhook для платежа %s", payment_id)
+    return {"ok": True}

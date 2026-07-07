@@ -40,6 +40,6 @@ export const api = {
   profile: () => req("/api/profile"),
   deliverySlots: () => req("/api/delivery-slots"),
   checkout: (data) => req("/api/checkout", { method: "POST", body: JSON.stringify(data) }),
-  confirmPayment: (data) =>
-    req("/api/payment/confirm", { method: "POST", body: JSON.stringify(data) }),
+  confirmPayment: (paymentId) =>
+    req("/api/payment/confirm", { method: "POST", body: JSON.stringify({ payment_id: paymentId }) }),
 };
