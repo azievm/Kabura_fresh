@@ -3,6 +3,7 @@ import { Header } from "./components/Header.jsx";
 import { Catalog } from "./screens/Catalog.jsx";
 import { Cart } from "./screens/Cart.jsx";
 import { Profile } from "./screens/Profile.jsx";
+import { ProductDetail } from "./screens/ProductDetail.jsx";
 import { Checkout } from "./screens/Checkout.jsx";
 import { Success } from "./screens/Success.jsx";
 import { api } from "./lib/api.js";
@@ -25,6 +26,7 @@ export function App() {
   const [profileError, setProfileError] = useState(false);
   const [me, setMe] = useState(null); // для префилла формы оформления
   const [lastOrderId, setLastOrderId] = useState(null);
+  const [selectedProduct, setSelectedProduct] = useState(null);
 
   // Категории + корзина + профиль при старте
   useEffect(() => {
@@ -156,6 +158,11 @@ export function App() {
     setScreen("success");
   }, []);
 
+  const openProduct = useCallback((product) => {
+    setSelectedProduct(product);
+    setScreen("product");
+  }, []);
+
   const cartIds = new Set(cart.items.map((i) => i.product_id));
 
   return (
@@ -174,6 +181,14 @@ export function App() {
           loading={loading}
           error={error}
           cartIds={cartIds}
+          onAdd={handleAdd}
+          onOpen={openProduct}
+        />
+      )}
+      {screen === "product" && (
+        <ProductDetail
+          product={selectedProduct}
+          inCart={selectedProduct ? cartIds.has(selectedProduct.id) : false}
           onAdd={handleAdd}
         />
       )}

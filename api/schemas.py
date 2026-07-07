@@ -26,7 +26,7 @@ class ProductOut(BaseModel):
     retail_price: float
     wholesale_price: Optional[float] = None
     amount: Optional[str] = None  # единица измерения / фасовка ("кг", "5,5 кг", "шт")
-    image_url: Optional[str] = None
+    has_image: bool = False       # фото грузится через /api/products/{id}/image
     is_available: bool = True
 
 
@@ -48,7 +48,7 @@ class CartItemOut(BaseModel):
     quantity: int
     line_total: float
     amount: Optional[str] = None
-    image_url: Optional[str] = None
+    has_image: bool = False
     is_available: bool = True
 
 

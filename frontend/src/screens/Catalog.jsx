@@ -11,6 +11,7 @@ export function Catalog({
   error,
   cartIds,
   onAdd,
+  onOpen,
 }) {
   return (
     <div className={s.screen}>
@@ -51,6 +52,7 @@ export function Catalog({
               product={p}
               inCart={cartIds.has(p.id)}
               onAdd={onAdd}
+              onOpen={onOpen}
             />
           ))}
         </ul>

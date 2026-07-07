@@ -7,7 +7,8 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -45,6 +46,20 @@ def _cart_price(product: Product) -> float:
     if product.wholesale_price is not None:
         return product.wholesale_price
     return product.retail_price
+
+
+def _product_out(p: Product) -> ProductOut:
+    return ProductOut(
+        id=p.id,
+        name=p.name,
+        description=p.description,
+        category=p.category,
+        retail_price=p.retail_price,
+        wholesale_price=p.wholesale_price,
+        amount=p.amount,
+        has_image=bool(p.image_url),
+        is_available=p.is_available,
+    )
 
 
 async def _get_or_create_user(tg_user: Dict[str, Any], session: AsyncSession) -> User:
@@ -157,7 +172,7 @@ async def products(
     query = query.order_by(Product.name)
 
     rows = (await session.scalars(query)).all()
-    return [ProductOut.model_validate(p, from_attributes=True) for p in rows]
+    return [_product_out(p) for p in rows]
 
 
 @router.get("/products/{product_id}", response_model=ProductOut)
@@ -168,7 +183,42 @@ async def product_detail(
     product = await session.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="product not found")
-    return ProductOut.model_validate(product, from_attributes=True)
+    return _product_out(product)
+
+
+@router.get("/products/{product_id}/image")
+async def product_image(
+    product_id: int,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """Отдаёт фото товара. image_url — это либо http(s)-ссылка (редирект),
+    либо Telegram file_id (скачиваем через бота и отдаём байты).
+    Без авторизации: <img> не может слать заголовок initData."""
+    product = await session.get(Product, product_id)
+    if product is None or not product.image_url:
+        raise HTTPException(status_code=404, detail="no image")
+
+    value = product.image_url
+    if value.startswith("http://") or value.startswith("https://"):
+        return RedirectResponse(value)
+
+    bot = getattr(request.app.state, "bot", None)
+    if bot is None:
+        raise HTTPException(status_code=404, detail="no image")
+    try:
+        file = await bot.get_file(value)
+        buf = await bot.download_file(file.file_path)
+        data = buf.read()
+    except Exception:
+        logger.exception("Не удалось получить фото товара %s", product_id)
+        raise HTTPException(status_code=404, detail="no image")
+
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 # --------------------------- корзина ---------------------------
@@ -199,7 +249,7 @@ async def _build_cart(user_id: int, session: AsyncSession) -> CartOut:
                 quantity=cart_item.quantity,
                 line_total=line_total,
                 amount=product.amount,
-                image_url=product.image_url,
+                has_image=bool(product.image_url),
                 is_available=product.is_available,
             )
         )

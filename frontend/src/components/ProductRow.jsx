@@ -8,7 +8,8 @@ import { haptic } from "../lib/telegram.js";
 import s from "./ProductRow.module.css";
 
 // Строка каталога: фото, название, наличие, цена, кнопка «В корзину».
-export function ProductRow({ product, inCart, onAdd }) {
+// Тап по фото или названию открывает карточку товара.
+export function ProductRow({ product, inCart, onAdd, onOpen }) {
   const [justAdded, setJustAdded] = useState(false);
 
   async function handleAdd() {
@@ -19,16 +20,20 @@ export function ProductRow({ product, inCart, onAdd }) {
   }
 
   const added = justAdded || inCart;
+  const open = () => onOpen?.(product);
 
   return (
     <li className={s.row}>
-      <ProductThumb
-        image={product.image_url}
-        name={product.name}
-        available={product.is_available}
-      />
+      <button className={s.thumbBtn} onClick={open} aria-label={`Открыть ${product.name}`}>
+        <ProductThumb
+          productId={product.id}
+          hasImage={product.has_image}
+          name={product.name}
+          available={product.is_available}
+        />
+      </button>
       <div className={s.info}>
-        <div className={s.name}>{product.name}</div>
+        <button className={s.name} onClick={open}>{product.name}</button>
         <Badge available={product.is_available} />
         <PriceTag
           retail={product.retail_price}

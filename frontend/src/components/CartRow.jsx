@@ -8,7 +8,12 @@ import s from "./CartRow.module.css";
 export function CartRow({ item, onInc, onDec, onRemove, disabled = false }) {
   return (
     <li className={s.row}>
-      <ProductThumb image={item.image_url} name={item.name} available={item.is_available} />
+      <ProductThumb
+        productId={item.product_id}
+        hasImage={item.has_image}
+        name={item.name}
+        available={item.is_available}
+      />
       <div className={s.info}>
         <div className={s.name}>{item.name}</div>
         <div className={s.unit}>

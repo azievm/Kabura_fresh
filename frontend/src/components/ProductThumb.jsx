@@ -1,15 +1,14 @@
 import { Leaf } from "lucide-react";
 import s from "./ProductThumb.module.css";
 
-// Фото товара. image_url из Telegram — это file_id (не грузится как <img>),
-// поэтому реальное изображение показываем только для http(s)-ссылок, иначе —
-// спокойную монохромную заглушку (без «мультяшных» эмодзи и без ложного фрукта).
-export function ProductThumb({ image, name, available = true }) {
-  const isUrl = typeof image === "string" && /^https?:\/\//.test(image);
+// Фото товара. Реальное фото грузим через прокси /api/products/{id}/image
+// (Telegram file_id нельзя вставить в <img> напрямую). Нет фото — спокойная
+// монохромная заглушка (без «мультяшных» эмодзи).
+export function ProductThumb({ productId, hasImage, name, available = true }) {
   return (
     <div className={`${s.thumb} ${!available ? s.dim : ""}`}>
-      {isUrl ? (
-        <img src={image} alt={name} loading="lazy" />
+      {hasImage ? (
+        <img src={`/api/products/${productId}/image`} alt={name} loading="lazy" />
       ) : (
         <Leaf className={s.placeholder} size={26} strokeWidth={1.75} aria-hidden="true" />
       )}
