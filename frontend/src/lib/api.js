@@ -38,4 +38,8 @@ export const api = {
   removeCartItem: (itemId) => req(`/api/cart/${itemId}`, { method: "DELETE" }),
   clearCart: () => req("/api/cart", { method: "DELETE" }),
   profile: () => req("/api/profile"),
+  deliverySlots: () => req("/api/delivery-slots"),
+  checkout: (data) => req("/api/checkout", { method: "POST", body: JSON.stringify(data) }),
+  confirmPayment: (data) =>
+    req("/api/payment/confirm", { method: "POST", body: JSON.stringify(data) }),
 };

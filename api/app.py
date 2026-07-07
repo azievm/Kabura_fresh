@@ -21,9 +21,10 @@ WEBAPP_DIR = Path(__file__).parent / "webapp"                       # диагн
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"  # собранный Mini App
 
 
-def create_api(db: Database) -> FastAPI:
+def create_api(db: Database, bot=None) -> FastAPI:
     app = FastAPI(title="Kabura Fresh API", version="0.1.0")
     app.state.db = db
+    app.state.bot = bot  # для уведомлений админов о новых заказах
 
     # Mini App грузится с внешнего домена, поэтому нужен CORS.
     # TODO: сузить allow_origins до боевого домена фронтенда на проде.

@@ -49,7 +49,7 @@ async def main():
         dp.callback_query.middleware(DBSessionMiddleware(db.async_session))
 
         # HTTP API для Mini App — в том же процессе и на той же базе, что и бот
-        api = create_api(db)
+        api = create_api(db, bot=bot)
         server = uvicorn.Server(
             uvicorn.Config(api, host=API_HOST, port=API_PORT, log_level="info")
         )

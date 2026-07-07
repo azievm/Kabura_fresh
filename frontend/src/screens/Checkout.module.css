@@ -1,0 +1,127 @@
+.screen {
+  padding: 16px 16px 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.input {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 12px 14px;
+  transition: border-color 140ms, box-shadow 140ms;
+}
+.input::placeholder {
+  color: var(--text-muted);
+}
+.input:focus {
+  outline: none;
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px var(--green-tint);
+}
+
+.textarea {
+  resize: vertical;
+  min-height: 56px;
+  line-height: 1.4;
+}
+
+.slots {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.slot {
+  flex: 1;
+  min-width: 96px;
+  height: 42px;
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  transition: background-color 140ms, color 140ms, border-color 140ms;
+}
+.slot:active {
+  transform: scale(0.98);
+}
+.slotActive {
+  background: var(--green-tint);
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.error {
+  font-size: 14px;
+  color: var(--danger);
+}
+
+.bar {
+  position: sticky;
+  bottom: 0;
+  padding-top: 8px;
+  background: linear-gradient(to top, var(--bg-page) 70%, transparent);
+}
+
+/* экран ожидания оплаты */
+.payCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: 32px 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+.payIcon {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: var(--green-tint);
+  color: var(--green);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.payTitle {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.payText {
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 300px;
+}
+
+.link {
+  font-size: 14px;
+  color: var(--green);
+  font-weight: 600;
+  padding: 6px;
+}

@@ -3,6 +3,8 @@ import { Header } from "./components/Header.jsx";
 import { Catalog } from "./screens/Catalog.jsx";
 import { Cart } from "./screens/Cart.jsx";
 import { Profile } from "./screens/Profile.jsx";
+import { Checkout } from "./screens/Checkout.jsx";
+import { Success } from "./screens/Success.jsx";
 import { api } from "./lib/api.js";
 import { tg, haptic } from "./lib/telegram.js";
 import { formatPrice } from "./lib/format.js";
@@ -21,8 +23,10 @@ export function App() {
   const [profile, setProfile] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState(false);
+  const [me, setMe] = useState(null); // для префилла формы оформления
+  const [lastOrderId, setLastOrderId] = useState(null);
 
-  // Категории + корзина при старте
+  // Категории + корзина + профиль при старте
   useEffect(() => {
     api
       .categories()
@@ -32,6 +36,7 @@ export function App() {
       })
       .catch(() => setError(true));
     api.getCart().then(setCart).catch(() => {});
+    api.me().then(setMe).catch(() => {});
   }, []);
 
   // Товары активной категории
@@ -112,7 +117,7 @@ export function App() {
     bb.hide();
   }, [screen]);
 
-  // --- Telegram MainButton: контекстный, зелёный (только каталог/корзина) ---
+  // --- Telegram MainButton: контекстный, зелёный (каталог и корзина) ---
   useEffect(() => {
     const mb = tg?.MainButton;
     if (!mb) return;
@@ -136,13 +141,20 @@ export function App() {
         text_color: "#FFFFFF",
         is_visible: true,
       });
-      const checkout = () => tg?.showAlert?.("Оформление заказа скоро будет доступно.");
-      mb.onClick(checkout);
-      return () => mb.offClick(checkout);
+      const go = () => setScreen("checkout");
+      mb.onClick(go);
+      return () => mb.offClick(go);
     }
 
+    // на checkout/profile/success собственную кнопку рисуют экраны или её нет
     mb.hide();
   }, [screen, cart.count, cart.total]);
+
+  const handleOrderSuccess = useCallback((orderId) => {
+    setLastOrderId(orderId);
+    setCart({ items: [], total: 0, count: 0 }); // корзина очищена на сервере
+    setScreen("success");
+  }, []);
 
   const cartIds = new Set(cart.items.map((i) => i.product_id));
 
@@ -178,6 +190,16 @@ export function App() {
       )}
       {screen === "profile" && (
         <Profile profile={profile} loading={profileLoading} error={profileError} />
+      )}
+      {screen === "checkout" && (
+        <Checkout cartTotal={cart.total} defaults={me} onSuccess={handleOrderSuccess} />
+      )}
+      {screen === "success" && (
+        <Success
+          orderId={lastOrderId}
+          onBrowse={() => setScreen("catalog")}
+          onOrders={() => setScreen("profile")}
+        />
       )}
     </>
   );

@@ -4,20 +4,29 @@
 основную, а корзина считается по оптовой цене (как в add_to_cart/checkout).
 """
 import logging
+from datetime import datetime
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app import handlers as bot_handlers
 from app.database import CartItem, Order, OrderItem, Product, User
 from .deps import get_session, get_telegram_user, get_user_id
 from .schemas import (
     CATEGORIES,
+    DELIVERY_SLOTS,
     AddToCartIn,
     CartItemOut,
     CartOut,
     CategoryOut,
+    CheckoutIn,
+    CheckoutOut,
+    ConfirmIn,
+    ConfirmOut,
+    DeliverySlotOut,
     MeResponse,
     OrderItemOut,
     OrderOut,
@@ -272,3 +281,127 @@ async def clear_cart(
     await session.execute(delete(CartItem).where(CartItem.user_id == user_id))
     await session.commit()
     return await _build_cart(user_id, session)
+
+
+# --------------------------- оформление и оплата ---------------------------
+
+@router.get("/delivery-slots", response_model=List[DeliverySlotOut])
+async def delivery_slots() -> List[DeliverySlotOut]:
+    return [DeliverySlotOut(**s) for s in DELIVERY_SLOTS]
+
+
+@router.post("/checkout", response_model=CheckoutOut)
+async def checkout(
+    payload: CheckoutIn,
+    user_id: int = Depends(get_user_id),
+    session: AsyncSession = Depends(get_session),
+) -> CheckoutOut:
+    """Создаёт платёж YooKassa для текущей корзины и сохраняет данные в профиль.
+    Сам заказ создаётся только после подтверждения оплаты (см. /payment/confirm)."""
+    cart_items = (
+        await session.scalars(select(CartItem).where(CartItem.user_id == user_id))
+    ).all()
+    if not cart_items:
+        raise HTTPException(status_code=400, detail="cart is empty")
+
+    total = sum(item.price * item.quantity for item in cart_items)
+
+    if bot_handlers.payment_system is None:
+        raise HTTPException(status_code=503, detail="payments are not configured")
+
+    payment = await bot_handlers.payment_system.create_payment(
+        amount=float(total),
+        user_id=user_id,
+        description=f"Kabura Fresh order {user_id}-{int(datetime.now().timestamp())}",
+    )
+    if not payment:
+        raise HTTPException(status_code=502, detail="payment creation failed")
+
+    # Запоминаем контактные данные для будущих заказов (префилл), даже если оплату бросят.
+    user = await session.scalar(select(User).where(User.telegram_id == user_id))
+    if user:
+        user.customer_name = payload.name
+        user.phone = payload.phone
+        user.delivery_address = payload.address
+        await session.commit()
+
+    return CheckoutOut(
+        payment_id=payment["id"],
+        confirmation_url=payment["confirmation_url"],
+        amount=float(payment["amount"]),
+    )
+
+
+@router.post("/payment/confirm", response_model=ConfirmOut)
+async def confirm_payment(
+    payload: ConfirmIn,
+    request: Request,
+    user_id: int = Depends(get_user_id),
+    session: AsyncSession = Depends(get_session),
+) -> ConfirmOut:
+    """Проверяет оплату у YooKassa и при успехе создаёт заказ из текущей корзины.
+    Идемпотентно по payment_id — повторный вызов не создаёт дубль."""
+    existing = await session.scalar(select(Order).where(Order.payment_id == payload.payment_id))
+    if existing:
+        return ConfirmOut(status="ok", order_id=existing.id)
+
+    ps = bot_handlers.payment_system
+    if ps is None:
+        raise HTTPException(status_code=503, detail="payments are not configured")
+
+    if not await ps.verify_payment_success(payload.payment_id):
+        return ConfirmOut(status="pending")
+
+    cart_items = (
+        await session.execute(
+            select(CartItem)
+            .where(CartItem.user_id == user_id)
+            .options(selectinload(CartItem.product))
+        )
+    ).scalars().all()
+    if not cart_items:
+        raise HTTPException(status_code=400, detail="cart is empty")
+
+    total = sum(item.price * item.quantity for item in cart_items)
+    order = Order(
+        user_id=user_id,
+        payment_id=payload.payment_id,
+        status="paid",
+        amount=total,
+        customer_name=payload.name,
+        customer_phone=payload.phone,
+        delivery_address=payload.address,
+        delivery_time=payload.delivery_time,
+    )
+    session.add(order)
+    await session.flush()
+
+    for item in cart_items:
+        session.add(
+            OrderItem(
+                order_id=order.id,
+                product_id=item.product_id,
+                product_name=item.product.name if item.product else f"Товар {item.product_id}",
+                price=item.price,
+                quantity=item.quantity,
+            )
+        )
+
+    user = await session.scalar(select(User).where(User.telegram_id == user_id))
+    if user:
+        user.customer_name = payload.name
+        user.phone = payload.phone
+        user.delivery_address = payload.address
+
+    notify_items = list(cart_items)  # снимок до очистки корзины
+    await session.execute(delete(CartItem).where(CartItem.user_id == user_id))
+    await session.commit()
+
+    bot = getattr(request.app.state, "bot", None)
+    if bot is not None:
+        try:
+            await bot_handlers.send_admin_notification(bot, order, notify_items)
+        except Exception:
+            logger.exception("Не удалось уведомить админов о заказе %s", order.id)
+
+    return ConfirmOut(status="ok", order_id=order.id)

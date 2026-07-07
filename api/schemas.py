@@ -92,3 +92,38 @@ class ProfileOut(BaseModel):
     phone: Optional[str] = None
     delivery_address: Optional[str] = None
     orders: List[OrderOut]
+
+
+# Интервалы доставки — те же, что в боте (delivery_morning/day/evening)
+DELIVERY_SLOTS = [
+    {"id": "morning", "label": "Утро (9–12)"},
+    {"id": "day", "label": "День (12–18)"},
+    {"id": "evening", "label": "Вечер (18–22)"},
+]
+
+
+class DeliverySlotOut(BaseModel):
+    id: str
+    label: str
+
+
+class CheckoutIn(BaseModel):
+    name: str = Field(min_length=1)
+    phone: str = Field(min_length=5)
+    address: str = Field(min_length=1)
+    delivery_time: str
+
+
+class CheckoutOut(BaseModel):
+    payment_id: str
+    confirmation_url: str
+    amount: float
+
+
+class ConfirmIn(CheckoutIn):
+    payment_id: str
+
+
+class ConfirmOut(BaseModel):
+    status: str  # 'ok' — заказ создан, 'pending' — оплата ещё не прошла
+    order_id: Optional[int] = None
