@@ -1,0 +1,67 @@
+/* Kabura Fresh — дизайн-токены (см. DESIGN.md)
+   Тёплая кремовая основа + зелёный (действия) + оранжевый (цены).
+   Строже прежнего: меньше скруглений, одна гарнитура, линейные иконки. */
+
+:root {
+  /* поверхности */
+  --bg-page: #f7f1e8;
+  --surface: #ffffff;
+  --surface-2: #f0e9dc;
+  --border: #e4dac8;
+
+  /* текст */
+  --text: #2e2820;
+  --text-muted: #7a6e5c;
+
+  /* действие — зелёный */
+  --green: #2e7d46;
+  --green-hover: #256a3b;
+  --green-tint: #e6f0e6;
+  --on-green: #ffffff;
+
+  /* цена/акцент — оранжевый */
+  --orange: #e8792e;
+  --orange-tint: #fbe7d3;
+
+  /* статусы */
+  --danger: #b5482b;
+  --danger-tint: #f6e0d8;
+
+  /* типографика */
+  --font: "Golos Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* радиусы (уменьшены) */
+  --radius-card: 10px;
+  --radius-control: 8px;
+
+  /* тени — едва заметные, тёплые */
+  --shadow-soft: 0 1px 2px rgba(46, 40, 32, 0.06);
+
+  /* z-слои */
+  --z-sticky: 10;
+  --z-mainbutton: 20;
+  --z-sheet: 30;
+}
+
+:root[data-theme="dark"] {
+  --bg-page: #1f1a14;
+  --surface: #2a241c;
+  --surface-2: #352e24;
+  --border: #413828;
+
+  --text: #f2e9db;
+  --text-muted: #b2a088;
+
+  --green: #4fb06b;
+  --green-hover: #5ec079;
+  --green-tint: #223a29;
+  --on-green: #16210f;
+
+  --orange: #f0914f;
+  --orange-tint: #3a2a1b;
+
+  --danger: #d9694a;
+  --danger-tint: #3a2620;
+
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.25);
+}

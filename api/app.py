@@ -10,13 +10,15 @@ from typing import Dict
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.database import Database
 from .routes import router
 
 logger = logging.getLogger(__name__)
 
-WEBAPP_DIR = Path(__file__).parent / "webapp"
+WEBAPP_DIR = Path(__file__).parent / "webapp"                       # диагностическая страница (fallback)
+FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"  # собранный Mini App
 
 
 def create_api(db: Database) -> FastAPI:
@@ -34,13 +36,21 @@ def create_api(db: Database) -> FastAPI:
 
     app.include_router(router)
 
-    @app.get("/")
-    async def index() -> FileResponse:
-        """Страница Mini App (пока диагностическая; реальный UI — на этапе фронтенда)."""
-        return FileResponse(WEBAPP_DIR / "index.html")
-
     @app.get("/api/health")
     async def health() -> Dict[str, str]:
         return {"status": "ok"}
+
+    # Раздаём собранный фронтенд (Vite build). Если сборки нет — диагностическая страница.
+    if FRONTEND_DIST.exists():
+        app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+        @app.get("/")
+        async def index() -> FileResponse:
+            return FileResponse(FRONTEND_DIST / "index.html")
+    else:
+        @app.get("/")
+        async def index() -> FileResponse:
+            logger.warning("frontend/dist не найден — отдаю диагностическую страницу")
+            return FileResponse(WEBAPP_DIR / "index.html")
 
     return app
