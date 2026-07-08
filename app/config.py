@@ -49,3 +49,8 @@ API_PORT = int(os.getenv('API_PORT', '8080'))
 # Публичный HTTPS-адрес Mini App (туннель на этапе разработки, домен на проде).
 # Если не задан — кнопка "Открыть магазин" в боте не показывается.
 MINI_APP_URL = os.getenv('MINI_APP_URL', '')
+
+# CORS: разрешённые origin фронтенда (через запятую).
+# По умолчанию "*" (удобно для разработки); на проде укажите свой домен,
+# например ALLOWED_ORIGINS=https://shop.example.com
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv('ALLOWED_ORIGINS', '*').split(',') if o.strip()]

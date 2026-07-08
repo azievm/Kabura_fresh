@@ -8,6 +8,8 @@ __pycache__/
 *.db
 data/*.db
 data/*.sqlite3
+data/*.backup*
+data/*.db.backup-*
 .DS_Store
 .idea/
 .vscode/

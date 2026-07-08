@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.config import ALLOWED_ORIGINS
 from app.database import Database
 from .routes import router
 
@@ -27,10 +28,11 @@ def create_api(db: Database, bot=None) -> FastAPI:
     app.state.bot = bot  # для уведомлений админов о новых заказах
 
     # Mini App грузится с внешнего домена, поэтому нужен CORS.
-    # TODO: сузить allow_origins до боевого домена фронтенда на проде.
+    # Список origin настраивается через ALLOWED_ORIGINS в .env (по умолчанию "*").
+    # На проде укажите свой домен, например: ALLOWED_ORIGINS=https://shop.example.com
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=ALLOWED_ORIGINS,
         allow_methods=["*"],
         allow_headers=["*"],
     )
