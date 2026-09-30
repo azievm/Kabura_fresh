@@ -39,8 +39,14 @@ PAYMENT_SECRET_KEY = os.getenv('PAYMENT_SECRET_KEY') or PAYMENT_TOKEN
 ITEMS_PER_PAGE = int(os.getenv('ITEMS_PER_PAGE', '5'))
 
 
-# ID чата для уведомлений
-NOTIFICATION_CHAT_ID = int(os.getenv('NOTIFICATION_CHAT_ID', '-1002579340956'))
+# ID чата для уведомлений (без значения по умолчанию — чужой чат подставлять нельзя)
+_notification_chat = os.getenv('NOTIFICATION_CHAT_ID', '').strip()
+NOTIFICATION_CHAT_ID = int(_notification_chat) if _notification_chat else None
+
+# Чек 54-ФЗ: код НДС (1 — без НДС) и запасной контакт, если телефон покупателя невалиден.
+# {user_id} подставляется автоматически; лучше указать реальный ящик магазина.
+PAYMENT_VAT_CODE = int(os.getenv('PAYMENT_VAT_CODE', '1'))
+PAYMENT_RECEIPT_EMAIL = os.getenv('PAYMENT_RECEIPT_EMAIL', 'user_{user_id}@temp.mail')
 
 # Настройки HTTP API (Mini App)
 API_HOST = os.getenv('API_HOST', '0.0.0.0')

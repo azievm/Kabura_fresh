@@ -1,5 +1,11 @@
 # Деплой Kabura Fresh (бот + Mini App)
 
+> **Быстрый путь — Docker.** Проект собирается одним `docker compose up -d --build`
+> (бот + API + собственный Caddy с автоматическим HTTPS, фронтенд собирается внутри образа).
+> На сервере: `cp .env.example .env`, заполнить, `chown -R 1000:1000 data`, затем `docker compose up -d --build`.
+> Домен задаётся переменной `CADDY_DOMAIN` (по умолчанию nip.io-адрес сервера). Разделы ниже — ручная установка без Docker.
+
+
 Бот и HTTP-API Mini App работают **в одном процессе** (`python main.py`):
 aiogram опрашивает Telegram, а FastAPI/uvicorn поднимается рядом через
 `asyncio.gather`. Отдельный веб-сервер для API запускать не нужно —

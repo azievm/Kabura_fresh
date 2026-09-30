@@ -1,0 +1,48 @@
+services:
+  kabura-bot:
+    build: .
+    image: kabura-bot:latest
+    container_name: kabura-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: "8080"
+      DATABASE_URL: sqlite+aiosqlite:///data/bot.db
+    volumes:
+      - ./data:/app/data
+    # Порт наружу не публикуется — HTTPS отдаёт caddy.
+    expose:
+      - "8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: kabura-caddy
+    restart: unless-stopped
+    depends_on:
+      - kabura-bot
+    environment:
+      # nip.io резолвится в IP сам; со своим доменом — поменять здесь и в .env
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-201-34-145-4.nip.io}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy-data:
+  caddy-config:

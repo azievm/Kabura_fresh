@@ -1,17 +1,20 @@
 import asyncio
 from typing import Dict, List, Optional
 from sqlalchemy import BigInteger, Column, Index, Integer, Numeric, String, Float, DateTime, ForeignKey, Boolean, select, func, update, inspect, text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import relationship, sessionmaker
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 try:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 except ImportError:
     async_sessionmaker = sessionmaker
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .config import DATABASE_URL
+
+def utc_now() -> datetime:
+    """Текущее UTC-время без tzinfo (формат, в котором уже хранятся даты в базе)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 
 # Создание базового класса для моделей
 Base = declarative_base()
@@ -27,7 +30,7 @@ class User(Base):
     customer_name = Column(String(100))
     phone = Column(String(20))
     delivery_address = Column(String(200))
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
 class Product(Base):
     __tablename__ = 'products'
@@ -41,8 +44,8 @@ class Product(Base):
     amount = Column(String) 
     image_url = Column(String)
     is_available = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
 
 
@@ -79,7 +82,7 @@ class Order(Base):
     
     id = Column(Integer, primary_key=True)
     user_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False)
-    payment_id = Column(String)  # ID платежа
+    payment_id = Column(String, unique=True)  # ID платежа
     amount = Column(Numeric(10, 2), nullable=False)  # Лучше для денег, чем Float
     customer_name = Column(String(100), nullable=False)
     customer_phone = Column(String(20), nullable=False)
@@ -138,6 +141,13 @@ class Database:
                 conn.execute(text('ALTER TABLE users ADD COLUMN delivery_address VARCHAR(200)'))
             if 'customer_name' not in existing_columns:
                 conn.execute(text('ALTER TABLE users ADD COLUMN customer_name VARCHAR(100)'))
+
+        # Один платёж — один заказ (страховка от дублей при гонке webhook / ручной проверки).
+        # NULL в SQLite уникальность не нарушают, так что заказы без payment_id допустимы.
+        if 'orders' in inspector.get_table_names():
+            conn.execute(text(
+                'CREATE UNIQUE INDEX IF NOT EXISTS ux_orders_payment_id ON orders (payment_id)'
+            ))
 
     async def close(self):
         """Закрытие соединения с базой данных"""

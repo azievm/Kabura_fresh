@@ -8,6 +8,7 @@ from app.database import Database
 from app.fsm_storage import SQLiteFSMStorage
 from app.handlers import router
 from app.admin_handlers import admin
+from app.maintenance import cleanup_loop
 from app.middlewares import DBSessionMiddleware
 from api import create_api
 
@@ -58,6 +59,7 @@ async def main():
         await asyncio.gather(
             run_polling(dp, bot),
             server.serve(),
+            cleanup_loop(db),
         )
 
     except Exception:

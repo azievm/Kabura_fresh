@@ -4,21 +4,24 @@
 основную, а корзина считается по оптовой цене (как в add_to_cart/checkout).
 """
 import logging
+import time
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import handlers as bot_handlers
 from app.database import CartItem, Order, OrderItem, Product, User
+from app.pricing import cart_total, line_total, unit_price
 from .deps import get_session, get_telegram_user, get_user_id
 from .schemas import (
     CATEGORIES,
     DELIVERY_SLOTS,
+    MAX_QUANTITY,
     AddToCartIn,
     CartItemOut,
     CartOut,
@@ -40,12 +43,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
-def _cart_price(product: Product) -> float:
-    """Цена единицы в корзине — оптовая (как в боте), с откатом на розничную,
-    если опт не задан (иначе расчёт суммы упал бы на None)."""
-    if product.wholesale_price is not None:
-        return product.wholesale_price
-    return product.retail_price
+# Кэш фото товаров: file_id -> (время, байты). Без него каждый показ картинки
+# ходил бы в Telegram API.
+_IMAGE_CACHE: Dict[str, Tuple[float, bytes]] = {}
+_IMAGE_CACHE_TTL = 3600
+_IMAGE_CACHE_MAX = 200
 
 
 def _product_out(p: Product) -> ProductOut:
@@ -206,13 +208,20 @@ async def product_image(
     bot = getattr(request.app.state, "bot", None)
     if bot is None:
         raise HTTPException(status_code=404, detail="no image")
-    try:
-        file = await bot.get_file(value)
-        buf = await bot.download_file(file.file_path)
-        data = buf.read()
-    except Exception:
-        logger.exception("Не удалось получить фото товара %s", product_id)
-        raise HTTPException(status_code=404, detail="no image")
+    cached = _IMAGE_CACHE.get(value)
+    if cached and time.monotonic() - cached[0] < _IMAGE_CACHE_TTL:
+        data = cached[1]
+    else:
+        try:
+            file = await bot.get_file(value)
+            buf = await bot.download_file(file.file_path)
+            data = buf.read()
+        except Exception:
+            logger.exception("Не удалось получить фото товара %s", product_id)
+            raise HTTPException(status_code=404, detail="no image")
+        if len(_IMAGE_CACHE) >= _IMAGE_CACHE_MAX:
+            _IMAGE_CACHE.pop(min(_IMAGE_CACHE, key=lambda k: _IMAGE_CACHE[k][0]))
+        _IMAGE_CACHE[value] = (time.monotonic(), data)
 
     return Response(
         content=data,
@@ -236,9 +245,10 @@ async def _build_cart(user_id: int, session: AsyncSession) -> CartOut:
     items: List[CartItemOut] = []
     total = 0.0
     count = 0
+    cart_rows_items = [ci for ci, _ in rows]
     for cart_item, product in rows:
-        line_total = cart_item.price * cart_item.quantity
-        total += line_total
+        item_total = line_total(cart_item.price, cart_item.quantity)
+        total += item_total
         count += cart_item.quantity
         items.append(
             CartItemOut(
@@ -247,14 +257,14 @@ async def _build_cart(user_id: int, session: AsyncSession) -> CartOut:
                 name=product.name,
                 price=cart_item.price,
                 quantity=cart_item.quantity,
-                line_total=line_total,
+                line_total=item_total,
                 amount=product.amount,
                 has_image=bool(product.image_url),
                 is_available=product.is_available,
             )
         )
 
-    return CartOut(items=items, total=total, count=count)
+    return CartOut(items=items, total=cart_total(cart_rows_items), count=count)
 
 
 @router.get("/cart", response_model=CartOut)
@@ -274,6 +284,8 @@ async def add_to_cart(
     product = await session.get(Product, payload.product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="product not found")
+    if not product.is_available:
+        raise HTTPException(status_code=409, detail="product is not available")
 
     existing = await session.scalar(
         select(CartItem).where(
@@ -281,14 +293,15 @@ async def add_to_cart(
         )
     )
     if existing:
-        existing.quantity += payload.quantity
+        existing.quantity = min(existing.quantity + payload.quantity, MAX_QUANTITY)
+        existing.price = unit_price(product)
     else:
         session.add(
             CartItem(
                 user_id=user_id,
                 product_id=product.id,
                 product_name=product.name,
-                price=_cart_price(product),
+                price=unit_price(product),
                 quantity=payload.quantity,
             )
         )
@@ -360,15 +373,30 @@ async def checkout(
     if not cart_items:
         raise HTTPException(status_code=400, detail="cart is empty")
 
-    total = sum(item.price * item.quantity for item in cart_items)
+    unavailable = [i.product.name for i in cart_items if i.product is None or not i.product.is_available]
+    if unavailable:
+        raise HTTPException(
+            status_code=409,
+            detail="unavailable products in cart: " + ", ".join(unavailable),
+        )
+
+    # Актуальные цены — как и в боте: цена в корзине могла устареть
+    for item in cart_items:
+        item.price = unit_price(item.product)
+    total = cart_total(cart_items)
 
     if bot_handlers.payment_system is None:
         raise HTTPException(status_code=503, detail="payments are not configured")
 
     payment = await bot_handlers.payment_system.create_payment(
-        amount=float(total),
+        amount=total,
         user_id=user_id,
         description=f"Kabura Fresh order {user_id}-{int(datetime.now().timestamp())}",
+        items=[
+            {"name": i.product.name, "price": i.price, "quantity": i.quantity}
+            for i in cart_items
+        ],
+        phone=payload.phone,
     )
     if not payment:
         raise HTTPException(status_code=502, detail="payment creation failed")
@@ -426,12 +454,30 @@ async def _finalize_order(payment_id: str, session: AsyncSession, bot) -> "Order
     if ps is None or not await ps.verify_payment_success(payment_id):
         return order  # оплата ещё не подтверждена — заказ остаётся pending
 
-    order.status = "paid"
-    await session.execute(delete(CartItem).where(CartItem.user_id == order.user_id))
+    # Атомарно: только один из конкурирующих вызовов (webhook / confirm) увидит
+    # rowcount == 1 и отправит уведомление.
+    won = await session.execute(
+        update(Order)
+        .where(Order.id == order.id, Order.status == "pending")
+        .values(status="paid")
+    )
+    if won.rowcount == 0:
+        await session.rollback()
+        await session.refresh(order)
+        return order
+
     items = (
         await session.scalars(select(OrderItem).where(OrderItem.order_id == order.id))
     ).all()
+    # Убираем из корзины только то, что было оплачено, а не всё, что добавили позже
+    await session.execute(
+        delete(CartItem).where(
+            CartItem.user_id == order.user_id,
+            CartItem.product_id.in_([i.product_id for i in items]),
+        )
+    )
     await session.commit()
+    await session.refresh(order)
 
     if bot is not None:
         try:
@@ -468,6 +514,9 @@ async def yookassa_webhook(request: Request, session: AsyncSession = Depends(get
         body = await request.json()
     except Exception:
         return {"ok": False}
+
+    if (body or {}).get("event") != "payment.succeeded":
+        return {"ok": True}  # остальные события не меняют заказ — не тратим запросы к YooKassa
 
     payment_id = ((body or {}).get("object") or {}).get("id")
     if not payment_id:

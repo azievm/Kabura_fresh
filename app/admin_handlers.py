@@ -402,7 +402,9 @@ def _user_orders_markup(user, orders, back_cb: str) -> InlineKeyboardMarkup:
 
 async def _fetch_user_orders(telegram_id: int, session: AsyncSession):
     result = await session.execute(
-        select(Order).where(Order.user_id == telegram_id).order_by(Order.created_at.desc())
+        select(Order)
+        .where(Order.user_id == telegram_id, Order.status != "pending")
+        .order_by(Order.created_at.desc())
     )
     return result.scalars().all()
 
@@ -440,7 +442,7 @@ async def process_search_term(message: Message, state: FSMContext, session: Asyn
     if not users:
         orders_with_phone = await session.execute(
             select(Order)
-            .where(Order.customer_phone.ilike(f"%{search_term}%"))
+            .where(Order.customer_phone.ilike(f"%{search_term}%"), Order.status != "pending")
             .order_by(Order.created_at.desc())
         )
         orders_with_phone = orders_with_phone.scalars().all()
@@ -507,7 +509,7 @@ async def all_orders_menu(callback: CallbackQuery, session: AsyncSession):
     
     # Получаем уникальные user_id из заказов
     distinct_user_ids = await session.execute(
-        select(Order.user_id).distinct()
+        select(Order.user_id).where(Order.status != "pending").distinct()
     )
     user_ids = [row[0] for row in distinct_user_ids.all()]
     
@@ -655,6 +657,10 @@ async def complete_order(callback: CallbackQuery, session: AsyncSession, bot: Bo
             
             if order.status == "completed":
                 await callback.answer("ℹ️ Заказ уже завершен", show_alert=True)
+                return
+
+            if order.status == "pending":
+                await callback.answer("⏳ Заказ ещё не оплачен", show_alert=True)
                 return
             
             # Удаляем связанные элементы корзины и состав заказа

@@ -1,4 +1,5 @@
 from datetime import datetime
+from html import escape as esc
 import logging
 import re
 from typing import Dict,List
@@ -12,6 +13,7 @@ from aiogram.types import FSInputFile,InputMediaPhoto
 from aiogram.exceptions import TelegramBadRequest
 from pathlib import Path
 from sqlalchemy import and_, case, delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from aiogram.types import Message, CallbackQuery, Contact, Location
@@ -39,6 +41,7 @@ from app.keyboards import (
     get_location_keyboard
 )
 from app.payment import PaymentSystem
+from app.pricing import cart_total, line_total, unit_price
 from .config import ADMIN_IDS, PAYMENT_SHOP_ID, PAYMENT_SECRET_KEY, ITEMS_PER_PAGE
 
 # Создаем роутер
@@ -129,7 +132,7 @@ async def cmd_prices(message: Message, session: AsyncSession):
         for product in products:
             wholesale_price = product.wholesale_price if product.wholesale_price is not None else '—'
             prices_text += (
-                f"• <b>{product.name}</b>: розница {product.retail_price} ₽, "
+                f"• <b>{esc(product.name)}</b>: розница {product.retail_price} ₽, "
                 f"опт {wholesale_price} ₽\n"
             )
 
@@ -151,12 +154,18 @@ async def cmd_update_price(message: Message, session: AsyncSession):
             return
 
         try:
-            parts = message.text.split()
-            if len(parts) != 4:
+            # Название может содержать пробелы: две последние части — цены
+            args = (message.text or "").split(maxsplit=1)
+            if len(args) != 2:
                 raise ValueError("Неверное количество параметров")
-            _, product_name, retail_price, wholesale_price = parts
-            retail_price = float(retail_price)
-            wholesale_price = float(wholesale_price)
+            name_part = args[1].rsplit(maxsplit=2)
+            if len(name_part) != 3:
+                raise ValueError("Неверное количество параметров")
+            product_name, retail_price, wholesale_price = name_part
+            retail_price = float(retail_price.replace(",", "."))
+            wholesale_price = float(wholesale_price.replace(",", "."))
+            if retail_price <= 0 or wholesale_price <= 0:
+                raise ValueError("Цена должна быть положительной")
         except ValueError:
             await message.answer(
                 "❌ Неверный формат команды.\n"
@@ -179,6 +188,7 @@ async def cmd_update_price(message: Message, session: AsyncSession):
 
         await message.answer(f"✅ Цены для товара '{product_name}' успешно обновлены.")
     except Exception:
+        logger.exception("Ошибка при обновлении цен")
         await message.answer(
             "Произошла ошибка при обновлении цен. Пожалуйста, попробуйте позже."
         )
@@ -456,11 +466,11 @@ async def show_product_detail(
         return
     
     text = (
-        f"<b>{product.name}</b>\n\n"
+        f"<b>{esc(product.name)}</b>\n\n"
         f"<b>Цена за 1 кг:</b> {product.retail_price}₽\n"
-        f"<b>Цена за ящик:</b> {product.wholesale_price}₽\n"
+        f"<b>Цена за ящик:</b> {unit_price(product)}₽\n"
         f"<b>Наличие:</b> {'✅ В наличии' if product.is_available else '❌ Нет в наличии'}\n"
-        f"<b>Описание:</b> {product.description or 'Нет описания'}\n"
+        f"<b>Описание:</b> {esc(product.description or 'Нет описания')}\n"
     )
     
     keyboard = await get_product_detail_keyboard(
@@ -543,7 +553,10 @@ async def add_to_cart(callback: CallbackQuery, session: AsyncSession):
         if not product:
             await callback.answer("⚠️ Товар не найден", show_alert=True)
             return
-            
+        if not product.is_available:
+            await callback.answer("❌ Товара нет в наличии", show_alert=True)
+            return
+
         # Проверяем, есть ли уже такой товар в корзине
         existing_item = await session.execute(
             select(CartItem).where(
@@ -555,13 +568,14 @@ async def add_to_cart(callback: CallbackQuery, session: AsyncSession):
         
         if existing_item:
             existing_item.quantity += 1
+            existing_item.price = unit_price(product)
             alert_text = "Количество увеличено!"
         else:
             new_item = CartItem(
                 user_id=user_id,
                 product_id=product_id,
                 product_name=product.name,  # Добавляем название товара
-                price=product.wholesale_price,  # Добавляем цену
+                price=unit_price(product),
                 quantity=1
             )
             session.add(new_item)
@@ -623,21 +637,24 @@ async def show_cart_page(message: Message, session: AsyncSession, user_id: int, 
             await message.answer("🛒 Ваша корзина пуста")
             return
         
+        # Итог считаем по всей корзине, а не по одной странице
+        all_items = (await session.scalars(
+            select(CartItem).where(CartItem.user_id == user_id)
+        )).all()
+        total = cart_total(all_items)
+
         # Формируем сообщение с корзиной
-        total = 0
         cart_text = "🛒 <b>Ваша корзина</b>\n\n"
         cart_text += "━━━━━━━━━━━━━━━━━━━━\n"
         
         for item, product in cart_items:
-            # Используем только оптовую цену
-            price = product.wholesale_price
+            # Цена — та, что зафиксирована в корзине (оптовая)
+            price = item.price
             price_type = "опт"
-            
-            item_total = price * item.quantity
-            total += item_total
-            
+            item_total = line_total(price, item.quantity)
+
             cart_text += (
-                f"<b>▫️ {product.name}</b>\n"
+                f"<b>▫️ {esc(product.name)}</b>\n"
                 f"<i>Цена ({price_type}):</i> {price} ₽ × {item.quantity} = <b>{item_total} ₽</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
             )
@@ -723,14 +740,18 @@ async def edit_cart_item(callback: CallbackQuery, session: AsyncSession):
         result = await session.execute(
             select(CartItem, Product)
             .join(Product, CartItem.product_id == Product.id)
-            .where(CartItem.id == cart_item_id)
+            .where(CartItem.id == cart_item_id, CartItem.user_id == callback.from_user.id)
         )
-        cart_item, product = result.first()
+        row = result.first()
+        if row is None:
+            await callback.answer("Товар уже удалён из корзины", show_alert=True)
+            return
+        cart_item, product = row
 
         text = (
             f"<b>✏️ Редактирование товара</b>\n\n"
-            f"<b>Название:</b> {product.name}\n"
-            f"<b>Цена:</b> {product.wholesale_price} ₽\n"
+            f"<b>Название:</b> {esc(product.name)}\n"
+            f"<b>Цена:</b> {cart_item.price} ₽\n"
             f"<b>Количество:</b> {cart_item.quantity}\n\n"
             f"<i>Измените количество:</i>"
         )
@@ -759,6 +780,9 @@ async def increase_quantity(callback: CallbackQuery, session: AsyncSession):
     try:
         cart_item_id = int(callback.data.split("_")[-1])
         cart_item = await session.get(CartItem, cart_item_id)
+        if cart_item is None or cart_item.user_id != callback.from_user.id:
+            await callback.answer("Товар не найден в вашей корзине", show_alert=True)
+            return
         cart_item.quantity += 1
         await session.commit()
         await callback.answer("Количество увеличено!", show_alert=True)
@@ -771,7 +795,10 @@ async def decrease_quantity(callback: CallbackQuery, session: AsyncSession):
     try:
         cart_item_id = int(callback.data.split("_")[-1])
         cart_item = await session.get(CartItem, cart_item_id)
-        
+        if cart_item is None or cart_item.user_id != callback.from_user.id:
+            await callback.answer("Товар не найден в вашей корзине", show_alert=True)
+            return
+
         if cart_item.quantity > 1:
             cart_item.quantity -= 1
             await session.commit()
@@ -787,6 +814,9 @@ async def remove_item(callback: CallbackQuery, session: AsyncSession):
     try:
         cart_item_id = int(callback.data.split("_")[-1])
         cart_item = await session.get(CartItem, cart_item_id)
+        if cart_item is None or cart_item.user_id != callback.from_user.id:
+            await callback.answer("Товар не найден в вашей корзине", show_alert=True)
+            return
         await session.delete(cart_item)
         await session.commit()
         
@@ -834,18 +864,29 @@ async def clear_cart(callback: CallbackQuery, session: AsyncSession):
 @router.callback_query(F.data == "checkout")
 async def start_checkout(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     try:
-        # Получаем сумму корзины только по оптовым ценам
-        total = await session.scalar(
-            select(func.sum(
-                Product.wholesale_price * CartItem.quantity
-            ))
-            .join(CartItem, Product.id == CartItem.product_id)
+        rows = (await session.execute(
+            select(CartItem, Product)
+            .join(Product, CartItem.product_id == Product.id)
             .where(CartItem.user_id == callback.from_user.id)
-        )
-        
-        if not total:
+        )).all()
+
+        if not rows:
             await callback.answer("Ваша корзина пуста", show_alert=True)
             return
+
+        unavailable = [p.name for _, p in rows if not p.is_available]
+        if unavailable:
+            await callback.answer(
+                "❌ Нет в наличии: " + ", ".join(unavailable)[:150] + ". Удалите из корзины.",
+                show_alert=True,
+            )
+            return
+
+        # Фиксируем актуальные цены (как и в Mini App) и считаем итог
+        for item, product in rows:
+            item.price = unit_price(product)
+        await session.commit()
+        total = cart_total([item for item, _ in rows])
 
         await state.update_data(total=total)
 
@@ -1015,12 +1056,14 @@ async def process_address(message: Message, state: FSMContext):
 
 # Добавляем функцию для преобразования callback_data в читаемый текст
 def get_delivery_time_text(callback_data: str) -> str:
+    # В базе хранится id слота ("morning"), из callback приходит "delivery_morning"
     time_mapping = {
-        "delivery_morning": "Утро (9-12)",
-        "delivery_day": "День (12-18)",
-        "delivery_evening": "Вечер (18-22)"
+        "morning": "Утро (9-12)",
+        "day": "День (12-18)",
+        "evening": "Вечер (18-22)",
     }
-    return time_mapping.get(callback_data, callback_data)
+    key = (callback_data or "").replace("delivery_", "", 1)
+    return time_mapping.get(key, callback_data or "Не указано")
 
 @router.callback_query(F.data.startswith("delivery_"), OrderStates.WAITING_DELIVERY_TIME)
 async def process_delivery_time(
@@ -1047,10 +1090,20 @@ async def process_delivery_time(
             )
             return
 
+        cart_rows = (await session.execute(
+            select(CartItem, Product)
+            .join(Product, CartItem.product_id == Product.id)
+            .where(CartItem.user_id == user_id)
+        )).all()
         payment = await payment_system.create_payment(
             amount=float(data['total']),
             user_id=user_id,
-            description=f"Order #{user_id}-{int(datetime.now().timestamp())}"
+            description=f"Order #{user_id}-{int(datetime.now().timestamp())}",
+            items=[
+                {"name": product.name, "price": item.price, "quantity": item.quantity}
+                for item, product in cart_rows
+            ],
+            phone=data.get('phone'),
         )
         
         if not payment:
@@ -1186,8 +1239,15 @@ async def check_payment_handler(
             # Очищаем корзину
             await session.execute(
                 delete(CartItem).where(CartItem.user_id == user_id))
-            
-            await session.commit()
+
+            try:
+                await session.commit()
+            except IntegrityError:
+                # Параллельное нажатие/вебхук уже создали заказ по этому платежу (unique payment_id)
+                await session.rollback()
+                await callback.answer("✅ Заказ по этой оплате уже оформлен", show_alert=True)
+                await state.clear()
+                return
             
             # Отправляем подтверждение пользователю
             await callback.answer(f"✅ Заказ #{order.id} успешно оформлен!", show_alert=True)
@@ -1220,10 +1280,10 @@ async def send_admin_notification(bot: Bot, order: Order, cart_items: list):
         admin_text = (
             "📦 <b>НОВЫЙ ОПЛАЧЕННЫЙ ЗАКАЗ!</b>\n\n"
             f"🆔 Номер: #{order.id}\n"
-            f"👤 Клиент: {order.customer_name}\n"
-            f"📞 Телефон: {order.customer_phone}\n"
-            f"📍 Адрес: {order.delivery_address}\n"
-            f"⏰ Время доставки: {delivery_time_text}\n"
+            f"👤 Клиент: {esc(str(order.customer_name))}\n"
+            f"📞 Телефон: {esc(str(order.customer_phone))}\n"
+            f"📍 Адрес: {esc(str(order.delivery_address))}\n"
+            f"⏰ Время доставки: {esc(delivery_time_text)}\n"
             f"💵 Сумма: {order.amount} ₽\n\n"
             f"🛒 <b>Состав заказа:</b>\n{items_text}"
         )
@@ -1256,7 +1316,7 @@ async def show_user_orders(callback: CallbackQuery, session: AsyncSession):
         # Получаем заказы пользователя
         orders = await session.execute(
             select(Order)
-            .where(Order.user_id == callback.from_user.id)
+            .where(Order.user_id == callback.from_user.id, Order.status != "pending")
             .order_by(Order.created_at.desc())
         )
         orders = orders.scalars().all()
@@ -1333,10 +1393,10 @@ async def show_order_details(callback: CallbackQuery, session: AsyncSession):
             "📋 <b>Детали заказа</b>\n\n"
             f"🆔 <b>Номер заказа:</b> {order.id}\n"
             f"📅 <b>Дата оформления:</b> {order.created_at.strftime('%d.%m.%Y %H:%M')}\n"
-            f"👤 <b>Имя:</b> {order.customer_name}\n"
-            f"📞 <b>Телефон:</b> {order.customer_phone}\n"
-            f"📍 <b>Адрес доставки:</b> {order.delivery_address}\n"
-            f"⏰ <b>Время доставки:</b> {order.delivery_time}\n"
+            f"👤 <b>Имя:</b> {esc(str(order.customer_name))}\n"
+            f"📞 <b>Телефон:</b> {esc(str(order.customer_phone))}\n"
+            f"📍 <b>Адрес доставки:</b> {esc(str(order.delivery_address))}\n"
+            f"⏰ <b>Время доставки:</b> {esc(get_delivery_time_text(order.delivery_time))}\n"
             f"🛒 <b>Статус:</b> {order.status}\n\n"
             "📦 <b>Состав заказа:</b>\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -1345,7 +1405,7 @@ async def show_order_details(callback: CallbackQuery, session: AsyncSession):
         # Добавляем товары
         for item in items:
             message_text += (
-                f"🍅 <b>{item.product_name}</b>\n"
+                f"🍅 <b>{esc(item.product_name)}</b>\n"
                 f"├ Цена: {item.price} ₽\n"
                 f"├ Количество: {item.quantity} кг\n"
                 f"└ Сумма: {item.price * item.quantity} ₽\n"
@@ -1384,7 +1444,7 @@ async def show_profile(callback: CallbackQuery, session: AsyncSession):
         # Получаем заказы пользователя
         orders = await session.execute(
             select(Order)
-            .where(Order.user_id == callback.from_user.id)
+            .where(Order.user_id == callback.from_user.id, Order.status != "pending")
             .order_by(Order.created_at.desc())
         )
         orders = orders.scalars().all()

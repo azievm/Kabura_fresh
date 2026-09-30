@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Категории каталога — те же, что в боте (get_catalog_keyboard) и дизайн-системе
 CATEGORIES = [
@@ -58,13 +58,16 @@ class CartOut(BaseModel):
     count: int             # суммарное количество единиц
 
 
+MAX_QUANTITY = 1000  # разумный потолок на позицию
+
+
 class AddToCartIn(BaseModel):
     product_id: int
-    quantity: int = Field(default=1, ge=1)
+    quantity: int = Field(default=1, ge=1, le=MAX_QUANTITY)
 
 
 class UpdateCartItemIn(BaseModel):
-    quantity: int = Field(ge=1)
+    quantity: int = Field(ge=1, le=MAX_QUANTITY)
 
 
 class OrderItemOut(BaseModel):
@@ -108,10 +111,23 @@ class DeliverySlotOut(BaseModel):
 
 
 class CheckoutIn(BaseModel):
-    name: str = Field(min_length=1)
-    phone: str = Field(min_length=5)
-    address: str = Field(min_length=1)
+    # длины совпадают с колонками БД (SQLite их сам не проверяет)
+    name: str = Field(min_length=1, max_length=100)
+    phone: str = Field(min_length=5, max_length=20)
+    address: str = Field(min_length=1, max_length=200)
     delivery_time: str
+
+    @field_validator("name", "phone", "address", mode="before")
+    @classmethod
+    def _strip(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("delivery_time")
+    @classmethod
+    def _known_slot(cls, v: str) -> str:
+        if v not in {s["id"] for s in DELIVERY_SLOTS}:
+            raise ValueError("unknown delivery slot")
+        return v
 
 
 class CheckoutOut(BaseModel):

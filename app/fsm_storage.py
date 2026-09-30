@@ -31,6 +31,8 @@ class SQLiteFSMStorage(BaseStorage):
                 session.add(FSMData(key=self._key(key), state=value))
             else:
                 row.state = value
+                if row.state is None and row.data is None:
+                    await session.delete(row)
             await session.commit()
 
     async def get_state(self, key: StorageKey) -> Optional[str]:
@@ -48,6 +50,8 @@ class SQLiteFSMStorage(BaseStorage):
                 session.add(FSMData(key=self._key(key), data=value))
             else:
                 row.data = value
+                if row.state is None and row.data is None:
+                    await session.delete(row)
             await session.commit()
 
     async def get_data(self, key: StorageKey) -> Dict[str, Any]:

@@ -1,0 +1,4 @@
+{$CADDY_DOMAIN} {
+	reverse_proxy kabura-bot:8080
+	encode gzip
+}
